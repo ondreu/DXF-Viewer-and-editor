@@ -17,6 +17,8 @@ type ColorOverride = number | "BYLAYER" | undefined;
 interface EditState {
 	offsetX: number;
 	offsetY: number;
+	/** per-vertex offsets keyed by coordinate-pair index (for grip dragging) */
+	pointOffsets?: Map<number, { dx: number; dy: number }>;
 	layer?: string;
 	color: ColorOverride;
 }
@@ -159,6 +161,52 @@ export class DxfDocument {
 		translate(e, dx, dy);
 	}
 
+	/**
+	 * Move a single coordinate pair of an entity (grip drag). `pairIndex` is the
+	 * ordinal of the (10/20)-style point within the entity — 0/1 = line
+	 * start/end, i = polyline vertex i, 0 = circle/arc centre / text position.
+	 */
+	moveVertex(id: string, pairIndex: number, dx: number, dy: number): void {
+		const e = this.byId.get(id);
+		if (!e) return;
+		if (!this.added.has(id)) {
+			const s = this.state(id);
+			if (!s.pointOffsets) s.pointOffsets = new Map();
+			const cur = s.pointOffsets.get(pairIndex) ?? { dx: 0, dy: 0 };
+			cur.dx += dx;
+			cur.dy += dy;
+			s.pointOffsets.set(pairIndex, cur);
+		}
+		const pt = vertexOf(e, pairIndex);
+		if (pt) {
+			pt.x += dx;
+			pt.y += dy;
+		}
+	}
+
+	/** Anchor point used to attach annotations to an entity. */
+	anchorOf(id: string): Point2 | null {
+		const e = this.byId.get(id);
+		if (!e) return null;
+		switch (e.type) {
+			case "LINE":
+				return { x: (e.start.x + e.end.x) / 2, y: (e.start.y + e.end.y) / 2 };
+			case "CIRCLE":
+			case "ARC":
+				return { ...e.center };
+			case "LWPOLYLINE":
+			case "POLYLINE":
+				return e.vertices[0] ? { ...e.vertices[0] } : null;
+			case "TEXT":
+			case "MTEXT":
+				return { ...e.position };
+			case "INSERT":
+				return { ...e.position };
+			case "UNSUPPORTED":
+				return e.position ? { ...e.position } : null;
+		}
+	}
+
 	setLayer(id: string, layer: string): void {
 		const e = this.byId.get(id);
 		if (!e) return;
@@ -208,7 +256,8 @@ export class DxfDocument {
 		}
 		for (const [id, s] of this.editState) {
 			if (this.deleted.has(id) || this.added.has(id)) continue;
-			if (s.offsetX === 0 && s.offsetY === 0 && s.layer === undefined && s.color === undefined) continue;
+			const hasVertexEdit = !!s.pointOffsets && [...s.pointOffsets.values()].some((v) => v.dx !== 0 || v.dy !== 0);
+			if (s.offsetX === 0 && s.offsetY === 0 && s.layer === undefined && s.color === undefined && !hasVertexEdit) continue;
 			const range = this.ranges[id];
 			if (!range) continue;
 			edits.set(id, this.patchTags(range, s));
@@ -232,12 +281,19 @@ export class DxfDocument {
 		const out: DxfTag[] = [];
 		let colorApplied = false;
 		let layerTagIndex = -1;
+		// Track the coordinate-pair ordinal so per-vertex offsets hit the right
+		// point (X code opens a new pair; the matching Y code reuses it).
+		let pair = -1;
 		for (let i = range.start; i < range.end; i++) {
 			const t = this.tags[i];
 			let value = t.value;
-			if (s.offsetX !== 0 || s.offsetY !== 0) {
-				if (t.code >= 10 && t.code <= 19) value = fmtReal(parseFloat(t.value) + s.offsetX);
-				else if (t.code >= 20 && t.code <= 29) value = fmtReal(parseFloat(t.value) + s.offsetY);
+			if (t.code >= 10 && t.code <= 19) {
+				pair++;
+				const vo = s.pointOffsets?.get(pair)?.dx ?? 0;
+				if (s.offsetX !== 0 || vo !== 0) value = fmtReal(parseFloat(t.value) + s.offsetX + vo);
+			} else if (t.code >= 20 && t.code <= 29) {
+				const vo = s.pointOffsets?.get(pair)?.dy ?? 0;
+				if (s.offsetY !== 0 || vo !== 0) value = fmtReal(parseFloat(t.value) + s.offsetY + vo);
 			}
 			if (t.code === 8 && s.layer !== undefined) value = s.layer;
 			if (t.code === 8) layerTagIndex = out.length;
@@ -264,6 +320,25 @@ export class DxfDocument {
 			additions: this.buildAdditions(),
 			additionsAt: this.entitiesEnd,
 		});
+	}
+}
+
+/** The mutable coordinate pair at a given ordinal, matching patchTags' order. */
+function vertexOf(e: RenderEntity, pairIndex: number): Point2 | null {
+	switch (e.type) {
+		case "LINE":
+			return pairIndex === 0 ? e.start : pairIndex === 1 ? e.end : null;
+		case "LWPOLYLINE":
+		case "POLYLINE":
+			return e.vertices[pairIndex] ?? null;
+		case "CIRCLE":
+		case "ARC":
+			return pairIndex === 0 ? e.center : null;
+		case "TEXT":
+		case "MTEXT":
+			return pairIndex === 0 ? e.position : null;
+		default:
+			return null;
 	}
 }
 

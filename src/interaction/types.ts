@@ -30,6 +30,12 @@ export interface ToolContext {
 	pick(world: Point2): string | null;
 	execute(cmd: Command): void;
 	select(id: string | null): void;
+	/** currently selected entity handle, if any (for grip editing) */
+	selectedId(): string | null;
+	/** id of a note annotation near a world point, for dragging it */
+	annotationAt(world: Point2): string | null;
+	/** move a note annotation; `attachTo` pins it to an entity (or null to detach) */
+	moveAnnotationTo(id: string, at: Point2, attachTo: string | null): void;
 	setOverlay(prims: Overlay): void;
 	/** publish a live/final measurement to the UI (null clears) */
 	reportMeasurement(m: Measurement | null): void;
@@ -51,7 +57,8 @@ export interface Tool {
 	readonly panWithLeftDrag: boolean;
 	activate?(): void;
 	deactivate?(): void;
-	pointer(phase: "down" | "move" | "up" | "click", world: Point2, ev: PointerEvent): void;
+	/** return true on a "down" press the tool consumes (e.g. grabbed a grip) */
+	pointer(phase: "down" | "move" | "up" | "click", world: Point2, ev: PointerEvent): boolean | void;
 	/** return true if the key was handled */
 	key?(ev: KeyboardEvent): boolean;
 	/** short hint shown in the UI */

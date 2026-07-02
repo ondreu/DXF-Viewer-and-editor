@@ -26,6 +26,9 @@ export function draggable(node: HTMLElement) {
 
 	const onDown = (ev: PointerEvent) => {
 		const target = ev.target as HTMLElement;
+		// Don't start a drag when pressing an interactive control in the header
+		// (collapse / close / selects) — otherwise the drag swallows their click.
+		if (target.closest("button, input, select, a, [contenteditable]")) return;
 		const handle = target.closest("[data-drag-handle]");
 		if (!handle || !node.contains(handle)) return;
 		dragging = true;

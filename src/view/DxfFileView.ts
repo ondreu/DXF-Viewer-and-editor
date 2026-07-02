@@ -57,6 +57,11 @@ export class DxfFileView extends FileView {
 		const canvasEl = host.createDiv({ cls: "dxf-canvas" });
 		const uiEl = host.createDiv({ cls: "dxf-ui-root" });
 
+		// Make the view focusable so tool keyboard shortcuts (Enter/Esc/C, arrows)
+		// reach it; refocus whenever the drawing is clicked.
+		host.tabIndex = -1;
+		this.registerDomEvent(canvasEl, "pointerdown", () => host.focus());
+
 		this.controller = new ViewController(canvasEl, {
 			theme: themeFromObsidian(host),
 			promptText: (initial) => promptForText(this.app, initial, "Text"),
@@ -64,7 +69,11 @@ export class DxfFileView extends FileView {
 
 		this.ui = new App({
 			target: uiEl,
-			props: { controller: this.controller, onSave: () => this.save(), nudgeStep: this.plugin.settings.nudgeStep },
+			props: {
+				controller: this.controller,
+				onSave: () => this.save(),
+				onScreenshot: () => this.screenshot(),
+			},
 		});
 
 		let annotationJSON: string | null = null;
@@ -87,6 +96,21 @@ export class DxfFileView extends FileView {
 		this.registerEvent(
 			this.app.workspace.on("css-change", () => this.controller?.setTheme(themeFromObsidian(this.contentEl)))
 		);
+		window.setTimeout(() => host.focus(), 0);
+	}
+
+	private async screenshot(): Promise<void> {
+		if (!this.controller || !this.file) return;
+		const dataUrl = this.controller.screenshotPNG();
+		const base64 = dataUrl.split(",")[1] ?? "";
+		const bin = atob(base64);
+		const bytes = new Uint8Array(bin.length);
+		for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+		const folder = this.file.parent && this.file.parent.path ? this.file.parent.path + "/" : "";
+		const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+		const path = `${folder}${this.file.basename}-${stamp}.png`;
+		await this.app.vault.createBinary(path, bytes.buffer as ArrayBuffer);
+		new Notice("Screenshot saved: " + path);
 	}
 
 	private onKeyDown(ev: KeyboardEvent): void {

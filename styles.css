@@ -182,6 +182,16 @@
 	font-size: var(--font-ui-smaller);
 }
 
+/* -- entity actions -------------------------------------------------------- */
+.dxf-actions {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	margin-top: 10px;
+}
+.dxf-actions .dxf-note { margin: 0; }
+
 /* -- nudge pad ------------------------------------------------------------- */
 .dxf-nudge {
 	display: grid;

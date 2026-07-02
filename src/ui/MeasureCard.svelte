@@ -9,7 +9,7 @@
 </script>
 
 {#if m}
-	<Card title="Measurement" anchor="anchor-bl" onClose={() => controller.setTool(state.activeTool)}>
+	<Card title="Measurement" anchor="anchor-bl" onClose={() => controller.clearMeasurement()}>
 		<div class="dxf-kv">
 			{#if m.kind === "distance"}
 				<span class="dxf-k">Length</span><span class="dxf-v dxf-mono">{m.length.toFixed(4)}</span>

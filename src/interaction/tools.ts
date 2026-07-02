@@ -1,7 +1,7 @@
 import type { Tool, ToolContext, ToolId } from "./types";
-import type { Point2, NewEntitySpec } from "../core/model/types";
+import type { Point2, NewEntitySpec, RenderEntity } from "../core/model/types";
 import type { OverlayPrim } from "../render/overlay";
-import { AddEntityCommand } from "../core/command/commands";
+import { AddEntityCommand, MoveCommand, MoveVertexCommand } from "../core/command/commands";
 import { AnnotationStore } from "../core/annotation/AnnotationStore";
 
 function snapMarker(ctx: ToolContext, world: Point2): { p: Point2; prim: OverlayPrim | null } {
@@ -20,16 +20,218 @@ function norm360(deg: number): number {
 
 // ---------------------------------------------------------------------------
 
+interface Grip {
+	mode: "vertex" | "whole";
+	pairIndex?: number;
+	point: Point2;
+}
+
+function gripsOf(e: RenderEntity): Grip[] {
+	switch (e.type) {
+		case "LINE":
+			return [
+				{ mode: "vertex", pairIndex: 0, point: e.start },
+				{ mode: "vertex", pairIndex: 1, point: e.end },
+			];
+		case "LWPOLYLINE":
+		case "POLYLINE":
+			return e.vertices.map((v, i) => ({ mode: "vertex", pairIndex: i, point: v }));
+		case "CIRCLE":
+		case "ARC":
+			return [{ mode: "whole", point: e.center }];
+		case "TEXT":
+		case "MTEXT":
+			return [{ mode: "whole", point: e.position }];
+		default:
+			return [];
+	}
+}
+
+/**
+ * Select + move. Click selects; drag a grip to move an endpoint/vertex, drag the
+ * body to move the whole entity, drag a note to reposition it. Empty-space drag
+ * still pans (handled by the renderer when this tool doesn't consume the press).
+ */
 export class SelectTool implements Tool {
 	readonly id: ToolId = "select";
 	readonly panWithLeftDrag = true;
+	private drag: null | {
+		kind: "vertex" | "whole" | "annotation";
+		id: string;
+		pairIndex?: number;
+		gripOrigin: Point2;
+		cursorStart: Point2;
+	} = null;
+
 	constructor(private ctx: ToolContext) {}
-	pointer(phase: string, world: Point2): void {
+
+	pointer(phase: string, world: Point2, ev?: PointerEvent): boolean | void {
+		if (phase === "down") return this.onDown(world);
+		if (phase === "move") return this.onMove(world, ev);
+		if (phase === "up") return this.onUp(world);
 		if (phase === "click") this.ctx.select(this.ctx.pick(world));
 	}
-	hint(): string {
-		return "Click to select · drag to pan · scroll to zoom";
+
+	private tol(): number {
+		return this.ctx.pixelSize() * 10;
 	}
+
+	private onDown(world: Point2): boolean {
+		const doc = this.ctx.doc();
+		if (!doc) return false;
+
+		// 1. grab a note annotation?
+		const annoId = this.ctx.annotationAt(world);
+		if (annoId) {
+			this.drag = { kind: "annotation", id: annoId, gripOrigin: world, cursorStart: world };
+			return true;
+		}
+
+		// 2. grab a grip / body of the selected editable entity?
+		const selId = this.ctx.selectedId();
+		if (selId && doc.isEditable(selId)) {
+			const e = doc.getEntity(selId);
+			if (e) {
+				let best: Grip | null = null;
+				let bestD = this.tol();
+				for (const g of gripsOf(e)) {
+					const d = dist(g.point, world);
+					if (d <= bestD) {
+						bestD = d;
+						best = g;
+					}
+				}
+				if (best) {
+					this.drag = {
+						kind: best.mode === "vertex" ? "vertex" : "whole",
+						id: selId,
+						pairIndex: best.pairIndex,
+						gripOrigin: { ...best.point },
+						cursorStart: world,
+					};
+					return true;
+				}
+				if (this.ctx.pick(world) === selId) {
+					this.drag = { kind: "whole", id: selId, gripOrigin: world, cursorStart: world };
+					return true;
+				}
+			}
+		}
+		return false; // let the renderer pan / click-to-select
+	}
+
+	private onMove(world: Point2, ev?: PointerEvent): void {
+		if (!this.drag) {
+			// hover: show grips of the selected entity so it's clear it can be edited
+			this.showGrips();
+			return;
+		}
+		if (ev && ev.buttons === 0) {
+			// pointer released outside; treat as cancel
+			this.drag = null;
+			this.ctx.setOverlay([]);
+			return;
+		}
+		const prims: OverlayPrim[] = [];
+		if (this.drag.kind === "vertex") {
+			const { p } = snapMarker(this.ctx, world);
+			const e = this.ctx.doc()?.getEntity(this.drag.id);
+			if (e) prims.push(...outlineWithVertex(e, this.drag.pairIndex!, p));
+			prims.push({ kind: "marker", at: p, style: "square", color: this.ctx.accent, sizePx: 6 });
+		} else if (this.drag.kind === "whole") {
+			const dx = world.x - this.drag.cursorStart.x;
+			const dy = world.y - this.drag.cursorStart.y;
+			const e = this.ctx.doc()?.getEntity(this.drag.id);
+			if (e) prims.push(...outlineTranslated(e, dx, dy));
+		} else {
+			const at = world;
+			prims.push({ kind: "marker", at, style: "dot", color: this.ctx.accent, sizePx: 6 });
+		}
+		this.ctx.setOverlay(prims);
+	}
+
+	private onUp(world: Point2): void {
+		const d = this.drag;
+		this.drag = null;
+		if (!d) return;
+		if (d.kind === "vertex") {
+			const { p } = snapMarker(this.ctx, world);
+			const dx = p.x - d.gripOrigin.x;
+			const dy = p.y - d.gripOrigin.y;
+			if (dx || dy) this.ctx.execute(new MoveVertexCommand(d.id, d.pairIndex!, dx, dy));
+		} else if (d.kind === "whole") {
+			const dx = world.x - d.cursorStart.x;
+			const dy = world.y - d.cursorStart.y;
+			if (dx || dy) this.ctx.execute(new MoveCommand(d.id, dx, dy));
+		} else {
+			const attach = this.ctx.pick(world);
+			this.ctx.moveAnnotationTo(d.id, world, attach);
+		}
+		this.showGrips();
+	}
+
+	private showGrips(): void {
+		const doc = this.ctx.doc();
+		const selId = this.ctx.selectedId();
+		if (!doc || !selId || !doc.isEditable(selId)) {
+			this.ctx.setOverlay([]);
+			return;
+		}
+		const e = doc.getEntity(selId);
+		if (!e) return;
+		const prims: OverlayPrim[] = gripsOf(e).map((g) => ({
+			kind: "marker",
+			at: g.point,
+			style: g.mode === "vertex" ? "square" : "circle",
+			color: this.ctx.accent,
+			sizePx: 5,
+		}));
+		this.ctx.setOverlay(prims);
+	}
+
+	deactivate(): void {
+		this.drag = null;
+		this.ctx.setOverlay([]);
+	}
+
+	hint(): string {
+		return "Click to select · drag a grip/point or body to move · drag empty space to pan";
+	}
+}
+
+function outlinePoints(e: RenderEntity): Point2[] | null {
+	switch (e.type) {
+		case "LINE":
+			return [e.start, e.end];
+		case "LWPOLYLINE":
+		case "POLYLINE":
+			return e.closed ? [...e.vertices, e.vertices[0]] : e.vertices;
+		default:
+			return null;
+	}
+}
+
+function outlineTranslated(e: RenderEntity, dx: number, dy: number): OverlayPrim[] {
+	const pts = outlinePoints(e);
+	if (pts) return [{ kind: "line", pts: pts.map((p) => ({ x: p.x + dx, y: p.y + dy })), dashed: true }];
+	if (e.type === "CIRCLE" || e.type === "ARC")
+		return [{ kind: "circle", center: { x: e.center.x + dx, y: e.center.y + dy }, radius: e.radius, dashed: true }];
+	if (e.type === "TEXT" || e.type === "MTEXT")
+		return [{ kind: "marker", at: { x: e.position.x + dx, y: e.position.y + dy }, style: "square", sizePx: 6 }];
+	return [];
+}
+
+function outlineWithVertex(e: RenderEntity, pairIndex: number, np: Point2): OverlayPrim[] {
+	if (e.type === "LINE") {
+		const pts = [pairIndex === 0 ? np : e.start, pairIndex === 1 ? np : e.end];
+		return [{ kind: "line", pts, dashed: true }];
+	}
+	if (e.type === "LWPOLYLINE" || e.type === "POLYLINE") {
+		const pts = e.vertices.map((v, i) => (i === pairIndex ? np : v));
+		if (e.closed && pts.length) pts.push(pts[0]);
+		return [{ kind: "line", pts, dashed: true }];
+	}
+	return [];
 }
 
 // -- measuring ---------------------------------------------------------------
@@ -270,19 +472,41 @@ export class DrawPolylineTool implements Tool {
 	readonly id: ToolId = "draw-polyline";
 	readonly panWithLeftDrag = false;
 	private pts: Point2[] = [];
+	private lastDownTime = 0;
+	private lastDownPos: Point2 | null = null;
 	constructor(private ctx: ToolContext) {}
 	deactivate(): void {
 		this.reset();
 	}
 	pointer(phase: string, world: Point2): void {
 		const { p, prim } = snapMarker(this.ctx, world);
-		if (phase === "down") this.pts.push(p);
+		if (phase === "down") {
+			const now = Date.now();
+			// Double-click (or click near the first vertex) finishes the polyline —
+			// no keyboard needed.
+			const doubleClick = now - this.lastDownTime < 350 && this.lastDownPos && dist(this.lastDownPos, p) < this.tol();
+			if (doubleClick && this.pts.length >= 2) {
+				this.finish(false);
+				return;
+			}
+			if (this.pts.length >= 3 && dist(this.pts[0], p) < this.tol()) {
+				this.finish(true);
+				return;
+			}
+			this.pts.push(p);
+			this.lastDownTime = now;
+			this.lastDownPos = p;
+		}
 		const prims: OverlayPrim[] = [];
 		if (this.pts.length) {
 			prims.push({ kind: "line", pts: [...this.pts, p], color: this.ctx.accent });
+			prims.push({ kind: "marker", at: this.pts[0], style: "square", color: this.ctx.accent, sizePx: 5 });
 		}
 		if (prim) prims.push(prim);
 		this.ctx.setOverlay(prims);
+	}
+	private tol(): number {
+		return this.ctx.pixelSize() * 10;
 	}
 	key(ev: KeyboardEvent): boolean {
 		if (ev.key === "Enter") {
@@ -313,7 +537,7 @@ export class DrawPolylineTool implements Tool {
 		this.ctx.setOverlay([]);
 	}
 	hint(): string {
-		return "Click to add vertices · Enter to finish · C to close · Esc to cancel";
+		return "Click to add vertices · double-click or Enter to finish · click first point / C to close · Esc to cancel";
 	}
 }
 
