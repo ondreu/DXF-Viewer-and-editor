@@ -5,8 +5,10 @@ import {
 	BufferGeometry,
 	Float32BufferAttribute,
 	LineBasicMaterial,
+	LineDashedMaterial,
 	Line,
 	LineLoop,
+	LineSegments,
 	Color,
 	Object3D,
 	Group,
@@ -21,26 +23,27 @@ import type { RenderEntity, Point2 } from "../core/model/types";
 import { EventEmitter } from "../core/events/EventEmitter";
 import { DEFAULT_THEME, type RenderTheme } from "./theme";
 import { pickEntity } from "./picking";
+import type { Overlay, OverlayPrim } from "./overlay";
 
 export type RendererEvents = {
 	select: { id: string | null };
 	viewchange: void;
 };
 
-interface Bounds {
-	minX: number;
-	minY: number;
-	maxX: number;
-	maxY: number;
+export type PointerPhase = "down" | "move" | "up" | "click";
+export interface ToolPointerHandler {
+	(phase: PointerPhase, world: Point2, ev: PointerEvent): void;
 }
 
 const PICK_PIXELS = 8;
 const ARC_STEPS = 64;
+const GRID_TARGET_PX = 80;
 
 /**
- * Framework-agnostic 2D DXF renderer over three.js (design doc §3). Never
- * imports Svelte; the UI subscribes through `events`. An orthographic camera
- * plus custom pan/zoom keeps the drawing planar.
+ * Framework-agnostic 2D DXF renderer over three.js (design doc §3). Owns the
+ * scene, camera, pan/zoom, an adaptive background grid, an overlay layer for
+ * tool feedback, and entity picking. It never imports Svelte or the tools; the
+ * tool manager drives it through the public API and pointer handler.
  */
 export class DxfRenderer {
 	readonly events = new EventEmitter<RendererEvents>();
@@ -48,16 +51,25 @@ export class DxfRenderer {
 	private scene = new Scene();
 	private camera: OrthographicCamera;
 	private renderer: WebGLRenderer;
+	private gridGroup = new Group();
 	private root = new Group();
+	private overlayGroup = new Group();
 	private objects = new Map<string, Object3D>();
 	private doc: DxfDocument | null = null;
 	private theme: RenderTheme;
 
-	// view state
 	private centerX = 0;
 	private centerY = 0;
 	private unitsPerPixel = 1;
 	private selectedId: string | null = null;
+
+	private gridVisible = true;
+	private overlayPrims: Overlay = [];
+	private labelCache = new Map<string, CanvasTexture>();
+
+	/** set by the tool manager; left-drag pans when true (select), else tools drive */
+	panWithLeftDrag = true;
+	private pointerHandler: ToolPointerHandler | null = null;
 
 	private resizeObserver: ResizeObserver;
 	private frameRequested = false;
@@ -68,13 +80,14 @@ export class DxfRenderer {
 		this.renderer = new WebGLRenderer({ antialias: true, alpha: true });
 		this.renderer.setPixelRatio(window.devicePixelRatio || 1);
 		this.container.appendChild(this.renderer.domElement);
-		this.renderer.domElement.style.width = "100%";
-		this.renderer.domElement.style.height = "100%";
-		this.renderer.domElement.style.display = "block";
-		this.renderer.domElement.style.touchAction = "none";
+		const s = this.renderer.domElement.style;
+		s.width = "100%";
+		s.height = "100%";
+		s.display = "block";
+		s.touchAction = "none";
 
 		this.camera = new OrthographicCamera(-1, 1, 1, -1, -1000, 1000);
-		this.scene.add(this.root);
+		this.scene.add(this.gridGroup, this.root, this.overlayGroup);
 		this.scene.background = new Color(this.theme.background);
 
 		this.resizeObserver = new ResizeObserver(() => this.onResize());
@@ -84,10 +97,46 @@ export class DxfRenderer {
 		this.onResize();
 	}
 
+	// -- public API used by the tool manager / view controller ---------------
+
+	get pixelSize(): number {
+		return this.unitsPerPixel;
+	}
+
+	pixelsToWorld(px: number): number {
+		return px * this.unitsPerPixel;
+	}
+
+	worldFromClient(clientX: number, clientY: number): Point2 {
+		return this.screenToWorld(clientX, clientY);
+	}
+
+	setPointerHandler(handler: ToolPointerHandler | null): void {
+		this.pointerHandler = handler;
+	}
+
+	pickAt(world: Point2): string | null {
+		if (!this.doc) return null;
+		return pickEntity(world, this.doc.entities, PICK_PIXELS * this.unitsPerPixel, (i) => !!this.doc?.isDeleted(i));
+	}
+
+	setOverlay(prims: Overlay): void {
+		this.overlayPrims = prims;
+		this.buildOverlay();
+		this.requestFrame();
+	}
+
+	setGridVisible(visible: boolean): void {
+		this.gridVisible = visible;
+		this.gridGroup.visible = visible;
+		this.requestFrame();
+	}
+
 	setTheme(theme: Partial<RenderTheme>): void {
 		this.theme = { ...this.theme, ...theme };
 		this.scene.background = new Color(this.theme.background);
 		if (this.doc) this.rebuild();
+		this.buildOverlay();
 		this.requestFrame();
 	}
 
@@ -97,7 +146,6 @@ export class DxfRenderer {
 		this.fit();
 	}
 
-	/** (Re)build all scene objects from the document's live entities. */
 	rebuild(): void {
 		this.clearObjects();
 		if (!this.doc) return;
@@ -113,7 +161,6 @@ export class DxfRenderer {
 		this.requestFrame();
 	}
 
-	/** Refresh a single entity after an edit (cheaper than a full rebuild). */
 	refreshEntity(id: string): void {
 		if (!this.doc) return;
 		const old = this.objects.get(id);
@@ -122,16 +169,14 @@ export class DxfRenderer {
 			disposeObject(old);
 			this.objects.delete(id);
 		}
-		if (this.doc.isDeleted(id)) {
-			this.requestFrame();
-			return;
-		}
-		const e = this.doc.getEntity(id);
-		if (e) {
-			const obj = this.buildObject(e);
-			if (obj) {
-				this.objects.set(id, obj);
-				this.root.add(obj);
+		if (!this.doc.isDeleted(id)) {
+			const e = this.doc.getEntity(id);
+			if (e) {
+				const obj = this.buildObject(e);
+				if (obj) {
+					this.objects.set(id, obj);
+					this.root.add(obj);
+				}
 			}
 		}
 		this.applySelectionHighlight();
@@ -155,14 +200,13 @@ export class DxfRenderer {
 		this.centerX = (b.minX + b.maxX) / 2;
 		this.centerY = (b.minY + b.maxY) / 2;
 		const rect = this.container.getBoundingClientRect();
-		const pxW = Math.max(rect.width, 1);
-		const pxH = Math.max(rect.height, 1);
-		this.unitsPerPixel = Math.max((w / pxW), (h / pxH)) * 1.1;
+		this.unitsPerPixel = Math.max(w / Math.max(rect.width, 1), h / Math.max(rect.height, 1)) * 1.1;
 		this.updateCamera();
+		this.buildOverlay();
 		this.requestFrame();
 	}
 
-	// -- object construction --------------------------------------------------
+	// -- entity objects -------------------------------------------------------
 
 	private buildObject(e: RenderEntity): Object3D | null {
 		const color = this.resolveColor(e.color);
@@ -182,13 +226,10 @@ export class DxfRenderer {
 			case "INSERT": {
 				const g = new Group();
 				const mat = new LineBasicMaterial({ color });
-				for (const [a, b] of e.segments) {
-					const geom = new BufferGeometry().setAttribute(
-						"position",
-						new Float32BufferAttribute([a.x, a.y, 0, b.x, b.y, 0], 3)
-					);
-					g.add(new Line(geom, mat));
-				}
+				const arr: number[] = [];
+				for (const [a, b] of e.segments) arr.push(a.x, a.y, 0, b.x, b.y, 0);
+				const geom = new BufferGeometry().setAttribute("position", new Float32BufferAttribute(arr, 3));
+				g.add(new LineSegments(geom, mat));
 				return g;
 			}
 			case "UNSUPPORTED":
@@ -223,20 +264,20 @@ export class DxfRenderer {
 		const s = 6 * this.unitsPerPixel;
 		const arr = [p.x - s, p.y, 0, p.x + s, p.y, 0, p.x, p.y - s, 0, p.x, p.y + s, 0];
 		const geom = new BufferGeometry().setAttribute("position", new Float32BufferAttribute(arr, 3));
-		return new Line(geom, new LineBasicMaterial({ color }));
+		return new LineSegments(geom, new LineBasicMaterial({ color }));
 	}
 
 	private textObject(text: string, pos: Point2, height: number, rotationDeg: number, color: number): Object3D | null {
 		if (!text) return null;
-		// UNTRUSTED string: drawn via canvas fillText, never HTML (design doc §5).
+		// UNTRUSTED string: rasterized via canvas, never HTML (design doc §5).
 		const canvas = document.createElement("canvas");
 		const ctx = canvas.getContext("2d");
 		if (!ctx) return null;
 		const pxHeight = 64;
 		ctx.font = `${pxHeight}px sans-serif`;
-		const metrics = ctx.measureText(text);
+		const w = ctx.measureText(text).width;
 		const pad = 8;
-		canvas.width = Math.max(1, Math.ceil(metrics.width) + pad * 2);
+		canvas.width = Math.max(1, Math.ceil(w) + pad * 2);
 		canvas.height = pxHeight + pad * 2;
 		const c2 = canvas.getContext("2d")!;
 		c2.font = `${pxHeight}px sans-serif`;
@@ -256,7 +297,6 @@ export class DxfRenderer {
 	}
 
 	private resolveColor(color: number): number {
-		// treat pure black/white as "auto" so entities stay visible on any theme
 		if (color === 0xffffff || color === 0x000000) return this.theme.foreground;
 		return color;
 	}
@@ -270,9 +310,8 @@ export class DxfRenderer {
 				// eslint-disable-next-line @typescript-eslint/no-explicit-any
 				const mat = (child as any).material as LineBasicMaterial | undefined;
 				if (mat && "color" in mat) {
-					if (selected) {
-						mat.color = new Color(this.theme.accent);
-					} else {
+					if (selected) mat.color = new Color(this.theme.accent);
+					else {
 						const e = this.doc?.getEntity(id);
 						if (e) mat.color = new Color(this.resolveColor(e.color));
 					}
@@ -280,6 +319,154 @@ export class DxfRenderer {
 				}
 			});
 		}
+	}
+
+	// -- grid -----------------------------------------------------------------
+
+	private niceStep(raw: number): number {
+		const exp = Math.floor(Math.log10(raw));
+		const f = raw / Math.pow(10, exp);
+		const nice = f < 1.5 ? 1 : f < 3 ? 2 : f < 7 ? 5 : 10;
+		return nice * Math.pow(10, exp);
+	}
+
+	private rebuildGrid(): void {
+		this.clearGroup(this.gridGroup);
+		if (!this.gridVisible) return;
+		const rect = this.container.getBoundingClientRect();
+		if (rect.width < 2 || rect.height < 2) return;
+		const step = this.niceStep(this.unitsPerPixel * GRID_TARGET_PX);
+		const major = step * 5;
+		const left = this.centerX - (rect.width / 2) * this.unitsPerPixel;
+		const right = this.centerX + (rect.width / 2) * this.unitsPerPixel;
+		const bottom = this.centerY - (rect.height / 2) * this.unitsPerPixel;
+		const top = this.centerY + (rect.height / 2) * this.unitsPerPixel;
+
+		const minor: number[] = [];
+		const majorArr: number[] = [];
+		const push = (arr: number[], x1: number, y1: number, x2: number, y2: number) =>
+			arr.push(x1, y1, 0, x2, y2, 0);
+		const maxLines = 600;
+		const isMajor = (v: number) => Math.abs(v / major - Math.round(v / major)) < 1e-6;
+
+		let count = 0;
+		for (let x = Math.ceil(left / step) * step; x <= right && count < maxLines; x += step, count++) {
+			push(isMajor(x) ? majorArr : minor, x, bottom, x, top);
+		}
+		count = 0;
+		for (let y = Math.ceil(bottom / step) * step; y <= top && count < maxLines; y += step, count++) {
+			push(isMajor(y) ? majorArr : minor, left, y, right, y);
+		}
+		const minorColor = new Color(this.theme.grid);
+		const majorColor = new Color(this.theme.grid).lerp(new Color(this.theme.foreground), 0.35);
+		if (minor.length) this.gridGroup.add(this.segments(minor, minorColor.getHex()));
+		if (majorArr.length) this.gridGroup.add(this.segments(majorArr, majorColor.getHex()));
+	}
+
+	private segments(arr: number[], color: number): LineSegments {
+		const geom = new BufferGeometry().setAttribute("position", new Float32BufferAttribute(arr, 3));
+		return new LineSegments(geom, new LineBasicMaterial({ color }));
+	}
+
+	// -- overlay --------------------------------------------------------------
+
+	private buildOverlay(): void {
+		this.clearGroup(this.overlayGroup, false);
+		for (const prim of this.overlayPrims) {
+			const obj = this.buildOverlayPrim(prim);
+			if (obj) this.overlayGroup.add(obj);
+		}
+	}
+
+	private buildOverlayPrim(prim: OverlayPrim): Object3D | null {
+		const color = prim.color ?? this.theme.accent;
+		switch (prim.kind) {
+			case "line": {
+				const arr: number[] = [];
+				for (const p of prim.pts) arr.push(p.x, p.y, 0);
+				const geom = new BufferGeometry().setAttribute("position", new Float32BufferAttribute(arr, 3));
+				const mat = prim.dashed
+					? new LineDashedMaterial({ color, dashSize: 6 * this.unitsPerPixel, gapSize: 4 * this.unitsPerPixel })
+					: new LineBasicMaterial({ color });
+				const obj = prim.closed ? new LineLoop(geom, mat) : new Line(geom, mat);
+				if (prim.dashed) (obj as Line).computeLineDistances();
+				return obj;
+			}
+			case "circle":
+				return this.arcObject(prim.center, prim.radius, 0, 360, color, true);
+			case "marker":
+				return this.overlayMarker(prim.at, prim.style, color, prim.sizePx ?? 6);
+			case "label":
+				return this.overlayLabel(prim.at, prim.text, color, prim.background);
+		}
+	}
+
+	private overlayMarker(at: Point2, style: string, color: number, sizePx: number): Object3D {
+		const s = sizePx * this.unitsPerPixel;
+		const arr: number[] = [];
+		const seg = (x1: number, y1: number, x2: number, y2: number) => arr.push(x1, y1, 0, x2, y2, 0);
+		if (style === "square") {
+			seg(at.x - s, at.y - s, at.x + s, at.y - s);
+			seg(at.x + s, at.y - s, at.x + s, at.y + s);
+			seg(at.x + s, at.y + s, at.x - s, at.y + s);
+			seg(at.x - s, at.y + s, at.x - s, at.y - s);
+		} else if (style === "x") {
+			seg(at.x - s, at.y - s, at.x + s, at.y + s);
+			seg(at.x - s, at.y + s, at.x + s, at.y - s);
+		} else if (style === "diamond") {
+			seg(at.x, at.y - s, at.x + s, at.y);
+			seg(at.x + s, at.y, at.x, at.y + s);
+			seg(at.x, at.y + s, at.x - s, at.y);
+			seg(at.x - s, at.y, at.x, at.y - s);
+		} else if (style === "triangle") {
+			seg(at.x, at.y + s, at.x + s, at.y - s);
+			seg(at.x + s, at.y - s, at.x - s, at.y - s);
+			seg(at.x - s, at.y - s, at.x, at.y + s);
+		} else if (style === "circle" || style === "dot") {
+			const steps = 20;
+			for (let i = 0; i < steps; i++) {
+				const a0 = (i / steps) * Math.PI * 2;
+				const a1 = ((i + 1) / steps) * Math.PI * 2;
+				seg(at.x + s * Math.cos(a0), at.y + s * Math.sin(a0), at.x + s * Math.cos(a1), at.y + s * Math.sin(a1));
+			}
+		}
+		return this.segments(arr, color);
+	}
+
+	private overlayLabel(at: Point2, text: string, color: number, background?: number): Object3D {
+		const key = `${text}|${color}|${background ?? ""}`;
+		let texture = this.labelCache.get(key);
+		let aspect = 1;
+		if (!texture) {
+			const canvas = document.createElement("canvas");
+			const px = 48;
+			const ctx = canvas.getContext("2d")!;
+			ctx.font = `${px}px sans-serif`;
+			const w = ctx.measureText(text).width;
+			const pad = 10;
+			canvas.width = Math.max(1, Math.ceil(w) + pad * 2);
+			canvas.height = px + pad * 2;
+			const c2 = canvas.getContext("2d")!;
+			if (background !== undefined) {
+				c2.fillStyle = "#" + (background & 0xffffff).toString(16).padStart(6, "0");
+				c2.fillRect(0, 0, canvas.width, canvas.height);
+			}
+			c2.font = `${px}px sans-serif`;
+			c2.textBaseline = "middle";
+			c2.fillStyle = "#" + (color & 0xffffff).toString(16).padStart(6, "0");
+			c2.fillText(text, pad, canvas.height / 2);
+			texture = new CanvasTexture(canvas);
+			this.labelCache.set(key, texture);
+		}
+		const img = texture.image as HTMLCanvasElement;
+		aspect = img.width / img.height;
+		const worldH = 16 * this.unitsPerPixel;
+		const worldW = aspect * worldH;
+		const geom = new PlaneGeometry(worldW, worldH);
+		const mat = new MeshBasicMaterial({ map: texture, transparent: true, side: DoubleSide, depthTest: false });
+		const mesh = new Mesh(geom, mat);
+		mesh.position.set(at.x + worldW / 2 + 6 * this.unitsPerPixel, at.y + worldH / 2 + 6 * this.unitsPerPixel, 1);
+		return mesh;
 	}
 
 	// -- camera / rendering ---------------------------------------------------
@@ -308,64 +495,86 @@ export class DxfRenderer {
 		this.frameRequested = true;
 		requestAnimationFrame(() => {
 			this.frameRequested = false;
-			if (!this.disposed) this.renderer.render(this.scene, this.camera);
+			if (this.disposed) return;
+			this.rebuildGrid();
+			this.renderer.render(this.scene, this.camera);
 		});
 	}
 
-	// -- input (pan / zoom / pick) --------------------------------------------
+	// -- input ----------------------------------------------------------------
 
 	private attachInput(): void {
 		const el = this.renderer.domElement;
-		let dragging = false;
+		let panning = false;
+		let leftMaybeClick = false;
 		let moved = false;
 		let lastX = 0;
 		let lastY = 0;
 
 		el.addEventListener("pointerdown", (ev) => {
-			dragging = true;
-			moved = false;
 			lastX = ev.clientX;
 			lastY = ev.clientY;
+			moved = false;
 			el.setPointerCapture(ev.pointerId);
+			const secondary = ev.button === 1 || ev.button === 2;
+			if (secondary || (ev.button === 0 && this.panWithLeftDrag)) {
+				panning = true;
+				leftMaybeClick = ev.button === 0;
+			} else if (ev.button === 0) {
+				this.emitTool("down", ev);
+			}
 		});
+
 		el.addEventListener("pointermove", (ev) => {
-			if (!dragging) return;
 			const dx = ev.clientX - lastX;
 			const dy = ev.clientY - lastY;
 			if (Math.abs(dx) + Math.abs(dy) > 2) moved = true;
 			lastX = ev.clientX;
 			lastY = ev.clientY;
-			this.centerX -= dx * this.unitsPerPixel;
-			this.centerY += dy * this.unitsPerPixel;
-			this.updateCamera();
-			this.requestFrame();
-			this.events.emit("viewchange", undefined);
+			if (panning) {
+				this.centerX -= dx * this.unitsPerPixel;
+				this.centerY += dy * this.unitsPerPixel;
+				this.updateCamera();
+				this.requestFrame();
+				this.events.emit("viewchange", undefined);
+			} else {
+				// hover + drag both surface as "move" so tools can preview/snap
+				this.emitTool("move", ev);
+			}
 		});
-		const endDrag = (ev: PointerEvent) => {
-			if (!dragging) return;
-			dragging = false;
+
+		const end = (ev: PointerEvent) => {
 			try {
 				el.releasePointerCapture(ev.pointerId);
 			} catch {
 				/* ignore */
 			}
-			if (!moved) this.handlePick(ev);
+			if (panning) {
+				panning = false;
+				if (leftMaybeClick && !moved) this.handleSelectClick(ev);
+				leftMaybeClick = false;
+			} else if (ev.button === 0) {
+				this.emitTool("up", ev);
+			}
 		};
-		el.addEventListener("pointerup", endDrag);
-		el.addEventListener("pointercancel", () => (dragging = false));
+		el.addEventListener("pointerup", end);
+		el.addEventListener("pointercancel", () => {
+			panning = false;
+			leftMaybeClick = false;
+		});
+		el.addEventListener("contextmenu", (ev) => ev.preventDefault());
 
 		el.addEventListener(
 			"wheel",
 			(ev) => {
 				ev.preventDefault();
-				const world = this.screenToWorld(ev.clientX, ev.clientY);
-				const factor = Math.pow(1.0015, ev.deltaY);
-				this.unitsPerPixel *= factor;
-				// keep the cursor's world point stationary while zooming
+				const before = this.screenToWorld(ev.clientX, ev.clientY);
+				this.unitsPerPixel *= Math.pow(1.0015, ev.deltaY);
 				const after = this.screenToWorld(ev.clientX, ev.clientY);
-				this.centerX += world.x - after.x;
-				this.centerY += world.y - after.y;
+				this.centerX += before.x - after.x;
+				this.centerY += before.y - after.y;
 				this.updateCamera();
+				this.buildOverlay(); // pixel-constant sizes changed with zoom
 				this.requestFrame();
 				this.events.emit("viewchange", undefined);
 			},
@@ -373,12 +582,18 @@ export class DxfRenderer {
 		);
 	}
 
-	private handlePick(ev: PointerEvent): void {
-		if (!this.doc) return;
+	private emitTool(phase: PointerPhase, ev: PointerEvent): void {
+		if (!this.pointerHandler) return;
+		this.pointerHandler(phase, this.screenToWorld(ev.clientX, ev.clientY), ev);
+	}
+
+	private handleSelectClick(ev: PointerEvent): void {
 		const world = this.screenToWorld(ev.clientX, ev.clientY);
-		const threshold = PICK_PIXELS * this.unitsPerPixel;
-		const id = pickEntity(world, this.doc.entities, threshold, (i) => !!this.doc?.isDeleted(i));
-		this.select(id);
+		if (this.pointerHandler) {
+			this.pointerHandler("click", world, ev);
+		} else {
+			this.select(this.pickAt(world));
+		}
 	}
 
 	private screenToWorld(clientX: number, clientY: number): Point2 {
@@ -393,12 +608,9 @@ export class DxfRenderer {
 
 	// -- bounds / cleanup -----------------------------------------------------
 
-	private computeBounds(): Bounds | null {
+	private computeBounds(): { minX: number; minY: number; maxX: number; maxY: number } | null {
 		if (!this.doc) return null;
-		let minX = Infinity,
-			minY = Infinity,
-			maxX = -Infinity,
-			maxY = -Infinity;
+		let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
 		const acc = (p: Point2) => {
 			minX = Math.min(minX, p.x);
 			minY = Math.min(minY, p.y);
@@ -408,37 +620,24 @@ export class DxfRenderer {
 		for (const e of this.doc.entities) {
 			if (this.doc.isDeleted(e.id)) continue;
 			switch (e.type) {
-				case "LINE":
-					acc(e.start);
-					acc(e.end);
-					break;
+				case "LINE": acc(e.start); acc(e.end); break;
 				case "CIRCLE":
 				case "ARC":
 					acc({ x: e.center.x - e.radius, y: e.center.y - e.radius });
 					acc({ x: e.center.x + e.radius, y: e.center.y + e.radius });
 					break;
 				case "LWPOLYLINE":
-				case "POLYLINE":
-					e.vertices.forEach(acc);
-					break;
+				case "POLYLINE": e.vertices.forEach(acc); break;
 				case "TEXT":
-				case "MTEXT":
-					acc(e.position);
-					break;
+				case "MTEXT": acc(e.position); break;
 				case "INSERT":
 					acc(e.position);
-					e.segments.forEach(([a, b]) => {
-						acc(a);
-						acc(b);
-					});
+					e.segments.forEach(([a, b]) => { acc(a); acc(b); });
 					break;
-				case "UNSUPPORTED":
-					if (e.position) acc(e.position);
-					break;
+				case "UNSUPPORTED": if (e.position) acc(e.position); break;
 			}
 		}
-		if (!isFinite(minX)) return null;
-		return { minX, minY, maxX, maxY };
+		return isFinite(minX) ? { minX, minY, maxX, maxY } : null;
 	}
 
 	private clearObjects(): void {
@@ -449,23 +648,34 @@ export class DxfRenderer {
 		this.objects.clear();
 	}
 
+	private clearGroup(group: Group, disposeTextures = true): void {
+		for (const child of [...group.children]) {
+			group.remove(child);
+			disposeObject(child, disposeTextures);
+		}
+	}
+
 	dispose(): void {
 		this.disposed = true;
 		this.resizeObserver.disconnect();
 		this.clearObjects();
+		this.clearGroup(this.gridGroup);
+		this.clearGroup(this.overlayGroup);
+		for (const t of this.labelCache.values()) t.dispose();
+		this.labelCache.clear();
 		this.renderer.dispose();
 		this.renderer.domElement.remove();
 		this.events.clear();
 	}
 }
 
-function disposeObject(obj: Object3D): void {
+function disposeObject(obj: Object3D, disposeTextures = true): void {
 	obj.traverse((child) => {
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any
 		const c = child as any;
 		if (c.geometry) c.geometry.dispose();
 		if (c.material) {
-			if (c.material.map) c.material.map.dispose();
+			if (disposeTextures && c.material.map) c.material.map.dispose();
 			c.material.dispose();
 		}
 	});

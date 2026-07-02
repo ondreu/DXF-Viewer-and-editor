@@ -14,16 +14,42 @@ This is **v1: DXF only**. DWG is intentionally out of scope (see
 
 - **File view** — click any `.dxf` in the file explorer to open it in a tab,
   the same way the built-in PDF viewer works.
-- **Note embeds** — `![[drawing.dxf]]` renders a read-only viewer inline.
-- **Pan / zoom / select** — pointer drag to pan, wheel to zoom, click to select.
+- **Note embeds** — `![[drawing.dxf]]` renders a read-only viewer inline
+  (annotations included).
+- **Pan / zoom / select** — drag to pan, wheel to zoom, click to select; a
+  middle/right-drag always pans, even while a tool is active.
+- **Adaptive grid** — a background grid with nice-number spacing that adapts to
+  zoom; toggle from the top bar.
+- **Snapping** — endpoint, midpoint, centre, quadrant, intersection and grid
+  snaps drive both measuring and drawing.
+- **Measure** — distance (with Δx/Δy and angle), radius/diameter/circumference,
+  and three-point angle, shown in a floating readout.
+- **Draw** — line, circle, polyline and text. Drawn geometry becomes **real DXF
+  entities** written back to the file on save.
+- **Annotations** — drop notes and save measurements as markup stored in a
+  **sidecar JSON** (`<drawing>.dxf.annotations.json`); the `.dxf` is never
+  touched by annotations.
 - **Light editing** — move, delete, and change the layer/colour of `LINE`,
   `CIRCLE`, `ARC`, `LWPOLYLINE` and `TEXT` entities, with undo/redo.
-- **Non-destructive saves** — anything the editor doesn't understand (including
-  whole entity types like `HATCH`, `SPLINE`, `DIMENSION`, …) is preserved
-  byte-for-structure on save. It is shown as an *unsupported* placeholder, never
-  silently discarded.
-- **Follows your Obsidian theme** — all colours come from Obsidian's CSS
-  variables, so light, dark, and community themes are respected automatically.
+- **Correct geometry** — OCS/extrusion (e.g. mirrored `(0,0,-1)` normals) and
+  nested/array block INSERTs are transformed to world coordinates, so holes and
+  sub-parts land where AutoCAD puts them.
+- **Non-destructive saves** — anything the editor doesn't understand (whole
+  entity types like `HATCH`, `SPLINE`, `DIMENSION`, …) is preserved on save and
+  shown as an *unsupported* placeholder, never silently discarded.
+- **Icon tool palette + floating cards** — a left-hand tool palette and
+  draggable, collapsible cards (properties, measurement, layers, annotations)
+  instead of a fixed sidebar. All styled from Obsidian's own theme variables.
+
+### Interface
+
+- **Left palette**: select · measure (distance / radius / angle) · draw (line /
+  circle / polyline / text) · note.
+- **Top bar**: fit · grid toggle · undo · redo · layers & draw settings ·
+  annotations · save (a dot marks unsaved changes).
+- **Keyboard**: `Esc` cancels the current tool operation, `Enter` finishes a
+  polyline (`C` closes it), arrow keys nudge a selection, `Ctrl/Cmd+S` saves,
+  `Ctrl/Cmd+Z` / `Shift+Ctrl/Cmd+Z` undo/redo.
 
 ### Supported entities
 
@@ -45,14 +71,16 @@ event emitter — the renderer never imports Svelte.
 ```
 src/
   core/           framework-agnostic: no Obsidian, no Svelte, no three.js
-    parser/       raw DXF tokenizer + dxf-parser wrapper (+ off-thread parse)
+    parser/       raw DXF tokenizer, dxf-parser wrapper, OCS transforms
     model/        DxfDocument, entity types, ACI colours, raw passthrough store
-    command/      reversible command stack (undo/redo)
-    serializer/   patches only edited entities back into the raw tag stream
-  render/         three.js 2D renderer (orthographic, custom pan/zoom/pick)
+    command/      reversible command stack (move/delete/layer/colour/draw)
+    serializer/   patches edited entities + injects newly drawn ones
+    annotation/   sidecar annotation store (notes / measurements / markup)
+  render/         three.js 2D renderer (grid, overlay, pan/zoom/pick)
+  interaction/    snap engine, tool manager, select/measure/draw/annotate tools
   worker/         Web Worker host + inlined parse worker (design doc §6)
   view/           Obsidian file view, note embed, view controller bridge
-  ui/             Svelte components (toolbar, property panel, layer panel)
+  ui/             Svelte UI shell (tool palette + floating cards)
   settings/       Obsidian Setting-API settings tab
 ```
 

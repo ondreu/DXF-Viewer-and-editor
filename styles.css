@@ -1,162 +1,212 @@
 /*
  * DXF Viewer & Editor — styling follows the active Obsidian theme via CSS
- * variables (design doc: "UI follows Obsidian UI theme"). No hard-coded colors
- * so light/dark and community themes are respected automatically.
+ * variables (light/dark/community themes respected). Full-bleed canvas with a
+ * floating, draggable card UI layered on top.
  */
 
 .dxf-view-root {
-	display: flex;
-	flex-direction: column;
-	height: 100%;
-	padding: 0;
-	overflow: hidden;
-}
-
-/* -- toolbar --------------------------------------------------------------- */
-.dxf-toolbar {
-	display: flex;
-	align-items: center;
-	gap: var(--size-2-2);
-	padding: var(--size-2-2) var(--size-4-2);
-	border-bottom: 1px solid var(--background-modifier-border);
-	background: var(--background-secondary);
-	flex: 0 0 auto;
-}
-
-.dxf-tb-btn {
-	font-size: var(--font-ui-small);
-	padding: var(--size-2-1) var(--size-2-3);
-	border-radius: var(--radius-s);
-	background: var(--interactive-normal);
-	color: var(--text-normal);
-	border: none;
-	cursor: pointer;
-	box-shadow: none;
-}
-.dxf-tb-btn:hover:not(:disabled) {
-	background: var(--interactive-hover);
-}
-.dxf-tb-btn:disabled {
-	opacity: 0.4;
-	cursor: default;
-}
-.dxf-tb-btn.mod-cta {
-	background: var(--interactive-accent);
-	color: var(--text-on-accent);
-}
-.dxf-tb-btn.mod-cta:hover {
-	background: var(--interactive-accent-hover);
-}
-.dxf-tb-sep {
-	width: 1px;
-	align-self: stretch;
-	background: var(--background-modifier-border);
-	margin: 0 var(--size-2-1);
-}
-.dxf-tb-spacer {
-	flex: 1 1 auto;
-}
-.dxf-dirty {
-	color: var(--text-accent);
-	font-size: var(--font-ui-smaller);
-	margin-right: var(--size-2-3);
-}
-
-/* -- body: canvas + sidebar ----------------------------------------------- */
-.dxf-body {
-	display: flex;
-	flex: 1 1 auto;
-	min-height: 0;
-}
-.dxf-canvas {
-	flex: 1 1 auto;
-	min-width: 0;
 	position: relative;
+	height: 100%;
+	overflow: hidden;
+	padding: 0;
+}
+
+.dxf-canvas {
+	position: absolute;
+	inset: 0;
 	background: var(--background-primary);
 }
-.dxf-sidebar-slot,
-.dxf-sidebar {
-	flex: 0 0 240px;
-	width: 240px;
-	overflow-y: auto;
-	border-left: 1px solid var(--background-modifier-border);
-	background: var(--background-secondary);
+
+/* overlay layer: transparent to pointer events except real controls */
+.dxf-ui-root,
+.dxf-ui {
+	position: absolute;
+	inset: 0;
+	pointer-events: none;
+}
+.dxf-ui > * {
+	pointer-events: auto;
 }
 
-/* -- panels ---------------------------------------------------------------- */
-.dxf-panel {
-	padding: var(--size-4-2);
-	border-bottom: 1px solid var(--background-modifier-border);
+/* -- icon buttons ---------------------------------------------------------- */
+.dxf-icon-btn,
+.dxf-tool-btn {
+	position: relative;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 30px;
+	height: 30px;
+	border: none;
+	border-radius: var(--radius-s);
+	background: transparent;
+	color: var(--text-muted);
+	cursor: pointer;
+	box-shadow: none;
+	padding: 0;
 }
-.dxf-panel-title {
+.dxf-icon-btn:hover,
+.dxf-tool-btn:hover {
+	background: var(--background-modifier-hover);
+	color: var(--text-normal);
+}
+.dxf-icon-btn:disabled {
+	opacity: 0.35;
+	cursor: default;
+	background: transparent;
+}
+.dxf-tool-btn.is-active,
+.dxf-icon-btn.is-active {
+	background: var(--background-modifier-active-hover, var(--background-modifier-hover));
+	color: var(--text-accent);
+	box-shadow: inset 0 0 0 1px var(--background-modifier-border);
+}
+.dxf-icon-btn.cta {
+	color: var(--text-accent);
+}
+.dxf-icon-btn.danger:hover {
+	color: var(--text-error);
+}
+.dxf-icon-btn svg,
+.dxf-tool-btn svg {
+	width: 17px;
+	height: 17px;
+}
+.dxf-dot {
+	position: absolute;
+	top: 4px;
+	right: 4px;
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+	background: var(--color-orange, #e0a030);
+}
+
+/* -- tool palette (left) --------------------------------------------------- */
+.dxf-ui-left {
+	position: absolute;
+	left: 10px;
+	top: 50%;
+	transform: translateY(-50%);
+}
+.dxf-palette {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	padding: 4px;
+	background: var(--background-secondary);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-m);
+	box-shadow: var(--shadow-s);
+}
+.dxf-palette-sep {
+	height: 1px;
+	margin: 3px 4px;
+	background: var(--background-modifier-border);
+}
+
+/* -- top action cluster ---------------------------------------------------- */
+.dxf-ui-top {
+	position: absolute;
+	top: 10px;
+	right: 10px;
+	display: flex;
+	align-items: center;
+	gap: 2px;
+	padding: 3px;
+	background: var(--background-secondary);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-m);
+	box-shadow: var(--shadow-s);
+}
+.dxf-top-sep {
+	width: 1px;
+	align-self: stretch;
+	margin: 3px 2px;
+	background: var(--background-modifier-border);
+}
+
+/* -- floating cards -------------------------------------------------------- */
+.dxf-card {
+	position: absolute;
+	width: 232px;
+	background: var(--background-secondary);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-m);
+	box-shadow: var(--shadow-m);
 	font-size: var(--font-ui-small);
+	z-index: 5;
+}
+.anchor-tr { top: 52px; right: 10px; }
+.anchor-tr-2 { top: 52px; right: 252px; }
+.anchor-tl-2 { top: 52px; left: 56px; }
+.anchor-bl { left: 56px; bottom: 34px; }
+
+.dxf-card-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding: 6px 6px 6px 10px;
+	border-bottom: 1px solid var(--background-modifier-border);
+	cursor: grab;
+	user-select: none;
+}
+.dxf-card-head:active { cursor: grabbing; }
+.dxf-card-title {
 	font-weight: var(--font-semibold);
 	color: var(--text-muted);
 	text-transform: uppercase;
-	letter-spacing: 0.05em;
-	margin-bottom: var(--size-2-3);
-}
-.dxf-panel-subtitle {
+	letter-spacing: 0.04em;
 	font-size: var(--font-ui-smaller);
-	color: var(--text-muted);
-	margin: var(--size-4-2) 0 var(--size-2-2);
 }
-.dxf-panel-empty,
-.dxf-panel-note {
-	font-size: var(--font-ui-smaller);
-	color: var(--text-muted);
-	font-style: italic;
-}
-.dxf-panel-note {
-	margin-top: var(--size-2-3);
-}
+.dxf-card-actions { display: flex; gap: 2px; }
+.dxf-card-actions .dxf-icon-btn { width: 22px; height: 22px; }
+.dxf-card-actions svg { width: 14px; height: 14px; }
+.dxf-card-body { padding: 10px; }
 
-.dxf-prop-grid {
+/* -- key/value grids ------------------------------------------------------- */
+.dxf-kv {
 	display: grid;
 	grid-template-columns: auto 1fr;
-	gap: var(--size-2-1) var(--size-2-3);
+	gap: 5px 10px;
 	align-items: center;
-	font-size: var(--font-ui-small);
 }
-.dxf-prop-key {
+.dxf-k { color: var(--text-muted); }
+.dxf-v { color: var(--text-normal); overflow-wrap: anywhere; }
+.dxf-v .dropdown { width: 100%; height: 26px; }
+.dxf-mono { font-family: var(--font-monospace); font-size: var(--font-ui-smaller); }
+.dxf-note {
+	margin-top: 8px;
 	color: var(--text-muted);
-}
-.dxf-prop-val {
-	color: var(--text-normal);
-	overflow-wrap: anywhere;
-}
-.dxf-prop-val .dropdown {
-	width: 100%;
-}
-.dxf-prop-text {
-	font-family: var(--font-monospace);
+	font-style: italic;
 	font-size: var(--font-ui-smaller);
-	white-space: pre-wrap;
 }
 
 /* -- nudge pad ------------------------------------------------------------- */
 .dxf-nudge {
 	display: grid;
 	grid-template-columns: repeat(3, 1fr);
-	gap: var(--size-2-1);
-	max-width: 150px;
+	gap: 3px;
+	margin-top: 10px;
+	max-width: 132px;
 }
-.dxf-nudge .dxf-tb-btn {
-	aspect-ratio: 1;
-}
+.dxf-nudge .dxf-icon-btn { width: 100%; aspect-ratio: 1; }
 
-/* -- layers ---------------------------------------------------------------- */
-.dxf-layer-list {
+/* -- layers / annotations lists ------------------------------------------- */
+.dxf-layer-list,
+.dxf-anno-list {
 	list-style: none;
-	margin: 0;
+	margin: 8px 0 0;
 	padding: 0;
+	max-height: 220px;
+	overflow-y: auto;
 }
-.dxf-layer-row {
+.dxf-layer-row,
+.dxf-anno-row {
 	display: flex;
 	align-items: center;
-	gap: var(--size-2-3);
-	padding: var(--size-2-1) 0;
-	font-size: var(--font-ui-small);
+	gap: 8px;
+	padding: 3px 0;
 }
 .dxf-layer-swatch {
 	width: 12px;
@@ -165,11 +215,47 @@
 	border: 1px solid var(--background-modifier-border);
 	flex: 0 0 auto;
 }
-.dxf-layer-name {
+.dxf-layer-name { color: var(--text-normal); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dxf-anno-kind {
+	flex: 0 0 auto;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+	text-transform: uppercase;
+	letter-spacing: 0.03em;
+}
+.dxf-anno-text { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.dxf-text-btn {
+	margin-top: 10px;
+	width: 100%;
+	height: 28px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-s);
+	background: var(--interactive-normal);
 	color: var(--text-normal);
+	cursor: pointer;
+	font-size: var(--font-ui-smaller);
+}
+.dxf-text-btn:hover { background: var(--interactive-hover); }
+
+/* -- hint bar -------------------------------------------------------------- */
+.dxf-hint {
+	position: absolute;
+	bottom: 8px;
+	left: 50%;
+	transform: translateX(-50%);
+	padding: 3px 10px;
+	background: var(--background-secondary);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-s);
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	pointer-events: none;
+	max-width: 60%;
+	text-align: center;
+	white-space: nowrap;
 	overflow: hidden;
 	text-overflow: ellipsis;
-	white-space: nowrap;
 }
 
 /* -- error + embed --------------------------------------------------------- */
@@ -186,7 +272,4 @@
 	overflow: hidden;
 	background: var(--background-primary);
 }
-.dxf-embed .dxf-canvas {
-	width: 100%;
-	height: 100%;
-}
+.dxf-embed .dxf-canvas { position: absolute; inset: 0; }

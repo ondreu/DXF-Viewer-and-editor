@@ -7,20 +7,18 @@ import type {
 	DxfTag,
 } from "../model/types";
 import { aciToRgb } from "../model/aci";
+import { ocsToWorld, isDefaultNormal, WCS_NORMAL, type Vec3 } from "./ocs";
 
 const DEFAULT_COLOR = 0x000000;
 const ARC_SEGMENTS = 64;
-
-interface RawEntityMeta {
-	handle: string;
-	dxfType: string;
-	firstPoint?: Point2;
-}
+const MAX_INSERT_DEPTH = 8;
+const MAX_ARRAY = 400;
 
 /**
  * Build the renderer's semantic model from dxf-parser output, plus surface any
- * entities dxf-parser dropped (unhandled types) as UNSUPPORTED placeholders,
- * discovered via the raw tag index. Editing and serialization key off `handle`.
+ * entities dxf-parser dropped as UNSUPPORTED placeholders. Two correctness
+ * concerns handled here (bug #5): OCS/extrusion transforms — which dxf-parser
+ * does not read for CIRCLE — and recursive/array block INSERTs.
  */
 export function buildRenderModel(
 	dxf: IDxf,
@@ -41,10 +39,8 @@ export function buildRenderModel(
 		colorIndex?: number;
 		layer?: string;
 	}): { color: number; colorNumber?: number } => {
-		// group 62 present -> explicit ACI; else BYLAYER.
 		if (typeof e.colorIndex === "number" && e.colorIndex !== 256) {
-			const rgb =
-				typeof e.color === "number" ? e.color : aciToRgb(e.colorIndex);
+			const rgb = typeof e.color === "number" ? e.color : aciToRgb(e.colorIndex);
 			return { color: rgb, colorNumber: e.colorIndex };
 		}
 		return { color: layerColor(e.layer ?? "0") };
@@ -56,23 +52,22 @@ export function buildRenderModel(
 	for (const e of dxf.entities ?? []) {
 		const handle = e.handle != null ? String(e.handle) : "";
 		if (handle) seenHandles.add(handle);
-		const built = buildEntity(e, handle, resolveColor, dxf.blocks ?? {});
+		// Extrusion for CIRCLE/ARC/LWPOLYLINE/TEXT is read from raw tags because
+		// dxf-parser omits it for several of these types.
+		const normal = handle && ranges[handle] ? readExtrusion(tags, ranges[handle]) : WCS_NORMAL;
+		const built = buildEntity(e, handle, normal, resolveColor, dxf.blocks ?? {});
 		if (built) entities.push(built);
 	}
 
-	// Entities dxf-parser dropped (unsupported types) still exist in the raw tag
-	// stream. Surface them as placeholders so they are visible and — crucially —
-	// never silently discarded on save (design doc §2, §8.3).
 	for (const [handle, range] of Object.entries(ranges)) {
 		if (seenHandles.has(handle)) continue;
-		const meta = readRawMeta(tags, range, handle);
 		entities.push({
 			id: handle,
 			type: "UNSUPPORTED",
-			dxfType: meta.dxfType,
+			dxfType: tags[range.start]?.value ?? "?",
 			layer: readLayer(tags, range),
 			color: 0x888888,
-			position: meta.firstPoint,
+			position: readFirstPoint(tags, range),
 		});
 	}
 
@@ -80,10 +75,10 @@ export function buildRenderModel(
 }
 
 function buildEntity(
-	// dxf-parser's union entity type is loose; we narrow by `type`.
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	e: any,
 	handle: string,
+	normal: Vec3,
 	resolveColor: (e: {
 		color?: number;
 		colorIndex?: number;
@@ -94,48 +89,51 @@ function buildEntity(
 	const { color, colorNumber } = resolveColor(e);
 	const layer: string = e.layer ?? "0";
 	const base = { id: handle, layer, color, colorNumber };
+	// For OCS entities, map their stored points into world coordinates.
+	const w = (p: { x?: number; y?: number; z?: number }): Point2 =>
+		ocsToWorld({ x: p.x ?? 0, y: p.y ?? 0, z: p.z ?? 0 }, normal);
 
 	switch (e.type) {
 		case "LINE": {
+			// LINE endpoints are always WCS — no OCS transform.
 			const [a, b] = e.vertices ?? [];
 			if (!a || !b) return null;
 			return { ...base, type: "LINE", start: xy(a), end: xy(b) };
 		}
 		case "CIRCLE":
 			if (!e.center) return null;
-			return { ...base, type: "CIRCLE", center: xy(e.center), radius: e.radius };
-		case "ARC":
+			return { ...base, type: "CIRCLE", center: w(e.center), radius: e.radius };
+		case "ARC": {
 			if (!e.center) return null;
-			return {
-				...base,
-				type: "ARC",
-				center: xy(e.center),
-				radius: e.radius,
-				// dxf-parser stores radians; renderer/model works in degrees.
-				startAngle: radToDeg(e.startAngle ?? 0),
-				endAngle: radToDeg(e.endAngle ?? 0),
-			};
+			const center = w(e.center);
+			let startAngle = radToDeg(e.startAngle ?? 0);
+			let endAngle = radToDeg(e.endAngle ?? 0);
+			// A mirrored OCS reverses arc sweep direction.
+			if (!isDefaultNormal(normal) && normal.z < 0) {
+				[startAngle, endAngle] = [180 - endAngle, 180 - startAngle];
+			}
+			return { ...base, type: "ARC", center, radius: e.radius, startAngle, endAngle };
+		}
 		case "LWPOLYLINE":
 		case "POLYLINE": {
-			const vertices = (e.vertices ?? []).map(xy);
+			const elevation = e.elevation ?? 0;
+			const vertices = (e.vertices ?? []).map((v: { x?: number; y?: number }) =>
+				w({ x: v.x, y: v.y, z: elevation })
+			);
 			if (vertices.length < 2) return null;
-			return {
-				...base,
-				type: e.type,
-				vertices,
-				closed: !!e.shape,
-			};
+			return { ...base, type: e.type, vertices, closed: !!e.shape };
 		}
 		case "TEXT":
 			return {
 				...base,
 				type: "TEXT",
-				position: xy(e.startPoint ?? { x: 0, y: 0 }),
+				position: w(e.startPoint ?? { x: 0, y: 0 }),
 				height: e.textHeight ?? 1,
 				rotation: e.rotation ?? 0,
 				text: String(e.text ?? ""),
 			};
 		case "MTEXT":
+			// MTEXT insertion point is WCS.
 			return {
 				...base,
 				type: "MTEXT",
@@ -144,13 +142,16 @@ function buildEntity(
 				rotation: e.rotation ?? 0,
 				text: String(e.text ?? ""),
 			};
-		case "INSERT":
+		case "INSERT": {
+			const segments: Array<[Point2, Point2]> = [];
+			flattenInsert(e, blocks, identityTx, 0, segments, normal);
 			return {
 				...base,
 				type: "INSERT",
-				position: xy(e.position ?? { x: 0, y: 0 }),
-				segments: flattenBlock(e, blocks),
+				position: w(e.position ?? { x: 0, y: 0 }),
+				segments,
 			};
+		}
 		default:
 			return {
 				...base,
@@ -161,21 +162,17 @@ function buildEntity(
 	}
 }
 
-function xy(p: { x?: number; y?: number }): Point2 {
-	return { x: p.x ?? 0, y: p.y ?? 0 };
-}
+// -- INSERT flattening (recursive + array), design doc §8.1 -----------------
 
-function radToDeg(r: number): number {
-	return (r * 180) / Math.PI;
-}
+type Tx = (p: { x: number; y: number }) => Point2;
 
-/** Minimal one-level flatten of a block reference into line segments (§8.1). */
-function flattenBlock(
-	insert: { name?: string; position?: Point2; rotation?: number; xScale?: number; yScale?: number },
-	blocks: Record<string, IBlock>
-): Array<[Point2, Point2]> {
-	const block = insert.name ? blocks[insert.name] : undefined;
-	if (!block) return [];
+const identityTx: Tx = (p) => ({ x: p.x, y: p.y });
+
+function composeInsertTx(
+	insert: { position?: Point2; rotation?: number; xScale?: number; yScale?: number },
+	block: IBlock | undefined,
+	parent: Tx
+): Tx {
 	const ox = insert.position?.x ?? 0;
 	const oy = insert.position?.y ?? 0;
 	const sx = insert.xScale ?? 1;
@@ -183,37 +180,94 @@ function flattenBlock(
 	const rot = ((insert.rotation ?? 0) * Math.PI) / 180;
 	const cos = Math.cos(rot);
 	const sin = Math.sin(rot);
-	const bx = block.position?.x ?? 0;
-	const by = block.position?.y ?? 0;
-
-	const tx = (p: { x: number; y: number }): Point2 => {
+	const bx = block?.position?.x ?? 0;
+	const by = block?.position?.y ?? 0;
+	return (p) => {
 		const lx = (p.x - bx) * sx;
 		const ly = (p.y - by) * sy;
-		return { x: ox + lx * cos - ly * sin, y: oy + lx * sin + ly * cos };
+		return parent({ x: ox + lx * cos - ly * sin, y: oy + lx * sin + ly * cos });
 	};
+}
 
-	const segs: Array<[Point2, Point2]> = [];
+function flattenInsert(
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	for (const be of (block.entities ?? []) as any[]) {
-		if (be.type === "LINE" && be.vertices?.length >= 2) {
-			segs.push([tx(be.vertices[0]), tx(be.vertices[1])]);
-		} else if (
-			(be.type === "LWPOLYLINE" || be.type === "POLYLINE") &&
-			be.vertices?.length >= 2
-		) {
-			for (let i = 0; i < be.vertices.length - 1; i++) {
-				segs.push([tx(be.vertices[i]), tx(be.vertices[i + 1])]);
+	insert: any,
+	blocks: Record<string, IBlock>,
+	parent: Tx,
+	depth: number,
+	out: Array<[Point2, Point2]>,
+	topNormal: Vec3
+): void {
+	if (depth > MAX_INSERT_DEPTH) return;
+	const block = insert.name ? blocks[insert.name] : undefined;
+	if (!block) return;
+
+	// Array (MINSERT) expansion.
+	const cols = Math.max(1, Math.min(insert.columnCount ?? 1, MAX_ARRAY));
+	const rows = Math.max(1, Math.min(insert.rowCount ?? 1, MAX_ARRAY));
+	const cs = insert.columnSpacing ?? 0;
+	const rs = insert.rowSpacing ?? 0;
+
+	for (let c = 0; c < cols; c++) {
+		for (let r = 0; r < rows; r++) {
+			const cell = {
+				...insert,
+				position: {
+					x: (insert.position?.x ?? 0) + c * cs,
+					y: (insert.position?.y ?? 0) + r * rs,
+				},
+				columnCount: 1,
+				rowCount: 1,
+			};
+			// Apply OCS only at the top-level insert.
+			const ocsParent: Tx =
+				depth === 0 && !isDefaultNormal(topNormal)
+					? (p) => ocsToWorld({ x: p.x, y: p.y, z: 0 }, topNormal)
+					: parent;
+			const tx = composeInsertTx(cell, block, ocsParent);
+			// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			for (const be of (block.entities ?? []) as any[]) {
+				emitBlockEntity(be, tx, blocks, depth, out, topNormal);
 			}
-			if (be.shape && be.vertices.length > 2) {
-				segs.push([tx(be.vertices[be.vertices.length - 1]), tx(be.vertices[0])]);
-			}
-		} else if (be.type === "CIRCLE" && be.center) {
-			pushArc(segs, be.center, be.radius, 0, Math.PI * 2, tx);
-		} else if (be.type === "ARC" && be.center) {
-			pushArc(segs, be.center, be.radius, be.startAngle ?? 0, be.endAngle ?? 0, tx);
 		}
 	}
-	return segs;
+}
+
+function emitBlockEntity(
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	be: any,
+	tx: Tx,
+	blocks: Record<string, IBlock>,
+	depth: number,
+	out: Array<[Point2, Point2]>,
+	topNormal: Vec3
+): void {
+	switch (be.type) {
+		case "LINE":
+			if (be.vertices?.length >= 2) out.push([tx(be.vertices[0]), tx(be.vertices[1])]);
+			break;
+		case "LWPOLYLINE":
+		case "POLYLINE":
+			if (be.vertices?.length >= 2) {
+				for (let i = 0; i < be.vertices.length - 1; i++) {
+					out.push([tx(be.vertices[i]), tx(be.vertices[i + 1])]);
+				}
+				if (be.shape && be.vertices.length > 2) {
+					out.push([tx(be.vertices[be.vertices.length - 1]), tx(be.vertices[0])]);
+				}
+			}
+			break;
+		case "CIRCLE":
+			if (be.center) pushArc(out, be.center, be.radius, 0, Math.PI * 2, tx);
+			break;
+		case "ARC":
+			if (be.center) pushArc(out, be.center, be.radius, be.startAngle ?? 0, be.endAngle ?? 0, tx);
+			break;
+		case "INSERT":
+			// Nested block reference: compose transforms and recurse.
+			flattenInsert(be, blocks, tx, depth + 1, out, topNormal);
+			break;
+	}
 }
 
 function pushArc(
@@ -222,7 +276,7 @@ function pushArc(
 	radius: number,
 	start: number,
 	end: number,
-	tx: (p: { x: number; y: number }) => Point2
+	tx: Tx
 ): void {
 	let sweep = end - start;
 	if (sweep <= 0) sweep += Math.PI * 2;
@@ -235,19 +289,29 @@ function pushArc(
 	}
 }
 
-function readRawMeta(tags: DxfTag[], range: TagRange, handle: string): RawEntityMeta {
-	let firstPoint: Point2 | undefined;
-	let px: number | undefined;
-	let py: number | undefined;
+// -- helpers ----------------------------------------------------------------
+
+function xy(p: { x?: number; y?: number }): Point2 {
+	return { x: p.x ?? 0, y: p.y ?? 0 };
+}
+
+function radToDeg(r: number): number {
+	return (r * 180) / Math.PI;
+}
+
+function readExtrusion(tags: DxfTag[], range: TagRange): Vec3 {
+	let x: number | undefined;
+	let y: number | undefined;
+	let z: number | undefined;
 	for (let i = range.start + 1; i < range.end; i++) {
-		if (tags[i].code === 10 && px === undefined) px = parseFloat(tags[i].value);
-		else if (tags[i].code === 20 && py === undefined) py = parseFloat(tags[i].value);
-		if (px !== undefined && py !== undefined) break;
+		const t = tags[i];
+		if (t.code === 0) break;
+		if (t.code === 210) x = parseFloat(t.value);
+		else if (t.code === 220) y = parseFloat(t.value);
+		else if (t.code === 230) z = parseFloat(t.value);
 	}
-	if (px !== undefined && py !== undefined && !Number.isNaN(px) && !Number.isNaN(py)) {
-		firstPoint = { x: px, y: py };
-	}
-	return { handle, dxfType: tags[range.start]?.value ?? "?", firstPoint };
+	if (x === undefined && y === undefined && z === undefined) return WCS_NORMAL;
+	return { x: x ?? 0, y: y ?? 0, z: z ?? 1 };
 }
 
 function readLayer(tags: DxfTag[], range: TagRange): string {
@@ -255,4 +319,16 @@ function readLayer(tags: DxfTag[], range: TagRange): string {
 		if (tags[i].code === 8) return tags[i].value;
 	}
 	return "0";
+}
+
+function readFirstPoint(tags: DxfTag[], range: TagRange): Point2 | undefined {
+	let px: number | undefined;
+	let py: number | undefined;
+	for (let i = range.start + 1; i < range.end; i++) {
+		if (tags[i].code === 10 && px === undefined) px = parseFloat(tags[i].value);
+		else if (tags[i].code === 20 && py === undefined) py = parseFloat(tags[i].value);
+		if (px !== undefined && py !== undefined) break;
+	}
+	if (px === undefined || py === undefined || Number.isNaN(px) || Number.isNaN(py)) return undefined;
+	return { x: px, y: py };
 }
