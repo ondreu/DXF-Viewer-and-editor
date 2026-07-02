@@ -124,6 +124,8 @@ export class AnnotationStore {
 function measureLabel(d: import("./types").MeasureData): string {
 	if (d.kind === "distance") return `${d.length.toFixed(3)} @ ${d.angleDeg.toFixed(1)}°`;
 	if (d.kind === "radius") return `R ${d.radius.toFixed(3)} · ⌀ ${d.diameter.toFixed(3)}`;
+	if (d.kind === "area") return `A ${d.area.toFixed(3)} · P ${d.perimeter.toFixed(3)}`;
+	if (d.kind === "point") return `(${d.x.toFixed(3)}, ${d.y.toFixed(3)})`;
 	return `${d.angleDeg.toFixed(2)}°`;
 }
 

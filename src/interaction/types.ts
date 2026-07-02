@@ -7,15 +7,19 @@ import type { Annotation } from "../core/annotation/types";
 
 export type ToolId =
 	| "select"
+	| "select-similar"
 	| "measure-distance"
 	| "measure-radius"
 	| "measure-angle"
+	| "measure-area"
+	| "measure-point"
 	| "draw-line"
 	| "draw-circle"
 	| "draw-circle-2p"
 	| "draw-circle-3p"
 	| "draw-arc"
 	| "draw-arc-3p"
+	| "draw-ellipse"
 	| "draw-polyline"
 	| "draw-rectangle"
 	| "draw-polygon"
@@ -32,12 +36,18 @@ export type ToolId =
 	| "array-rect"
 	| "array-polar"
 	| "match-props"
+	| "join"
+	| "break"
+	| "explode"
+	| "dimension-linear"
 	| "annotate";
 
 export type Measurement =
 	| { kind: "distance"; length: number; dx: number; dy: number; angleDeg: number }
 	| { kind: "radius"; radius: number; diameter: number; circumference: number }
-	| { kind: "angle"; angleDeg: number };
+	| { kind: "angle"; angleDeg: number }
+	| { kind: "area"; area: number; perimeter: number }
+	| { kind: "point"; x: number; y: number };
 
 /** Everything a tool needs, so tools never touch three.js or Obsidian directly. */
 export interface ToolContext {
@@ -48,6 +58,8 @@ export interface ToolContext {
 	pick(world: Point2): string | null;
 	execute(cmd: Command): void;
 	select(id: string | null): void;
+	/** replace the whole selection set at once (e.g. "select similar") */
+	selectMany(ids: string[]): void;
 	/** ctrl/cmd+click: add or remove an entity from the selection set */
 	toggleSelection(id: string | null): void;
 	/** currently selected entity handle, if any (for grip editing) */

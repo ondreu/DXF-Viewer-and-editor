@@ -25,6 +25,7 @@ export type EntityType =
 	| "LINE"
 	| "CIRCLE"
 	| "ARC"
+	| "ELLIPSE"
 	| "LWPOLYLINE"
 	| "POLYLINE"
 	| "TEXT"
@@ -37,6 +38,7 @@ export const EDITABLE_TYPES: ReadonlySet<EntityType> = new Set<EntityType>([
 	"LINE",
 	"CIRCLE",
 	"ARC",
+	"ELLIPSE",
 	"LWPOLYLINE",
 	"TEXT",
 ]);
@@ -69,6 +71,24 @@ export interface ArcEntity extends BaseEntity {
 	center: Point2;
 	radius: number;
 	/** degrees, CCW from +X */
+	startAngle: number;
+	endAngle: number;
+}
+
+export interface EllipseEntity extends BaseEntity {
+	type: "ELLIPSE";
+	center: Point2;
+	/**
+	 * Absolute world position of the major-axis endpoint (i.e. `center` plus the
+	 * DXF group-11 vector). Kept absolute — not relative — so every generic edit
+	 * (move/rotate/scale/mirror/grip-drag) treats it like any other vertex; the
+	 * relative-vector form DXF actually stores is only computed back out at the
+	 * serialization boundary (see `entityToTags` and `DxfDocument.patchTags`).
+	 */
+	majorAxisEndpoint: Point2;
+	/** minor/major axis ratio, 0 < ratio <= 1 */
+	ratio: number;
+	/** sweep start/end param in degrees (0/360 = a full ellipse); CCW like ARC */
 	startAngle: number;
 	endAngle: number;
 }
@@ -107,6 +127,7 @@ export type RenderEntity =
 	| LineEntity
 	| CircleEntity
 	| ArcEntity
+	| EllipseEntity
 	| PolylineEntity
 	| TextEntity
 	| InsertEntity
@@ -153,5 +174,6 @@ export type NewEntitySpec =
 	| { type: "LINE"; layer: string; colorNumber?: number; start: Point2; end: Point2 }
 	| { type: "CIRCLE"; layer: string; colorNumber?: number; center: Point2; radius: number }
 	| { type: "ARC"; layer: string; colorNumber?: number; center: Point2; radius: number; startAngle: number; endAngle: number }
+	| { type: "ELLIPSE"; layer: string; colorNumber?: number; center: Point2; majorAxisEndpoint: Point2; ratio: number; startAngle?: number; endAngle?: number }
 	| { type: "LWPOLYLINE"; layer: string; colorNumber?: number; vertices: Point2[]; closed: boolean }
 	| { type: "TEXT"; layer: string; colorNumber?: number; position: Point2; height: number; text: string; rotation?: number };

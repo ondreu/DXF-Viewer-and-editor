@@ -23,6 +23,7 @@ import type { ToolContext, ToolId, Measurement } from "../interaction/types";
 import { computeSnap, DEFAULT_SNAP, type SnapSettings, type SnapResult } from "../interaction/snap";
 import { AnnotationStore } from "../core/annotation/AnnotationStore";
 import type { Annotation } from "../core/annotation/types";
+import { entityLength } from "../core/geom/geometry2d";
 
 const ANNOTATION_COLOR = 0xe0a030;
 const SNAP_PIXELS = 12;
@@ -31,6 +32,8 @@ export interface ControllerState {
 	selected: RenderEntity | null;
 	/** number of currently selected entities (multi-select) */
 	selectionCount: number;
+	/** combined perimeter/arc-length of every selected entity */
+	selectionLength: number;
 	editable: boolean;
 	canUndo: boolean;
 	canRedo: boolean;
@@ -42,6 +45,7 @@ export interface ControllerState {
 	activeLayer: string;
 	activeColor: number | null;
 	gridVisible: boolean;
+	isolating: boolean;
 	snap: SnapSettings;
 	annotations: readonly Annotation[];
 }
@@ -103,6 +107,7 @@ export class ViewController {
 				this.emit();
 			},
 			select: (id) => this.setSelectionIds(id ? [id] : []),
+			selectMany: (ids) => this.setSelectionIds(ids),
 			toggleSelection: (id) => this.toggleSelection(id),
 			selectedId: () => this.selectedId,
 			selectedIds: () => [...this.selection],
@@ -234,9 +239,15 @@ export class ViewController {
 
 	getState(): ControllerState {
 		const selected = this.selectedId ? this.doc?.getEntity(this.selectedId) ?? null : null;
+		let selectionLength = 0;
+		for (const id of this.selection) {
+			const e = this.doc?.getEntity(id);
+			if (e) selectionLength += entityLength(e);
+		}
 		return {
 			selected,
 			selectionCount: this.selection.size,
+			selectionLength,
 			editable: !!(this.selectedId && this.doc?.isEditable(this.selectedId)),
 			canUndo: this.stack?.canUndo ?? false,
 			canRedo: this.stack?.canRedo ?? false,
@@ -248,6 +259,7 @@ export class ViewController {
 			activeLayer: this.activeLayerName,
 			activeColor: this.activeColorAci,
 			gridVisible: this.gridVisible,
+			isolating: this.doc?.isIsolating ?? false,
 			snap: this.snapSettings,
 			annotations: this.annotations.all,
 		};
@@ -281,6 +293,26 @@ export class ViewController {
 		this.gridVisible = !this.gridVisible;
 		this.renderer.setGridVisible(this.gridVisible);
 		this.emit();
+	}
+
+	/** Show only the layer(s) of the current selection; toggling again (or with
+	 * nothing selected) restores every layer. Purely a view state — never touches
+	 * saved layer visibility or the undo stack. */
+	toggleIsolate(): void {
+		if (!this.doc) return;
+		if (this.doc.isIsolating) {
+			this.doc.setIsolatedLayers(null);
+		} else {
+			const names = new Set<string>();
+			for (const id of this.selection) {
+				const e = this.doc.getEntity(id);
+				if (e) names.add(e.layer);
+			}
+			if (!names.size) return;
+			this.doc.setIsolatedLayers([...names]);
+		}
+		this.renderer.rebuild();
+		this.reconcileSelection();
 	}
 
 	setSnap(patch: Partial<SnapSettings>): void {

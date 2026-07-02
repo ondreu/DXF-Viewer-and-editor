@@ -15,9 +15,10 @@ import {
 	SetPropsCommand,
 	ChangeLayerCommand,
 	ChangeColorCommand,
+	DeleteCommand,
 } from "../core/command/commands";
 import { AnnotationStore } from "../core/annotation/AnnotationStore";
-import { circumcircle, angleInArc, isCuttingEdgeType, computeFillet, computeChamfer, trimLinePoint, extendLinePoint, trimArcAngle } from "../core/geom/geometry2d";
+import { circumcircle, angleInArc, isCuttingEdgeType, computeFillet, computeChamfer, trimLinePoint, extendLinePoint, trimArcAngle, entityArea, joinLineChain, ellipsePoints, buildLinearDimension } from "../core/geom/geometry2d";
 
 /** Prompt for a number via the shared text modal; returns null if cancelled or unparsable. */
 async function promptNumber(ctx: ToolContext, title: string, initial: number): Promise<number | null> {
@@ -82,6 +83,7 @@ function outlineRotated(e: RenderEntity, pivot: Point2, deg: number, color: numb
 	if (pts) return [{ kind: "line", pts: pts.map(rot), color, dashed: true }];
 	if (e.type === "CIRCLE") return [{ kind: "circle", center: rot(e.center), radius: e.radius, color, dashed: true }];
 	if (e.type === "ARC") return arcOutline(rot(e.center), e.radius, e.startAngle + deg, e.endAngle + deg, color);
+	if (e.type === "ELLIPSE") return [{ kind: "line", pts: ellipsePoints(rot(e.center), rot(e.majorAxisEndpoint), e.ratio, e.startAngle, e.endAngle), color, dashed: true }];
 	if (e.type === "TEXT" || e.type === "MTEXT") return [{ kind: "marker", at: rot(e.position), style: "square", color, sizePx: 6 }];
 	return [];
 }
@@ -93,6 +95,7 @@ function outlineScaled(e: RenderEntity, pivot: Point2, factor: number, color: nu
 	if (pts) return [{ kind: "line", pts: pts.map(scale), color, dashed: true }];
 	if (e.type === "CIRCLE") return [{ kind: "circle", center: scale(e.center), radius: e.radius * factor, color, dashed: true }];
 	if (e.type === "ARC") return arcOutline(scale(e.center), e.radius * factor, e.startAngle, e.endAngle, color);
+	if (e.type === "ELLIPSE") return [{ kind: "line", pts: ellipsePoints(scale(e.center), scale(e.majorAxisEndpoint), e.ratio, e.startAngle, e.endAngle), color, dashed: true }];
 	if (e.type === "TEXT" || e.type === "MTEXT") return [{ kind: "marker", at: scale(e.position), style: "square", color, sizePx: 6 }];
 	return [];
 }
@@ -120,6 +123,7 @@ function outlineMirrored(e: RenderEntity, a: Point2, b: Point2, color: number): 
 		const newEnd = norm360(2 * theta - e.startAngle);
 		return arcOutline(refl(e.center), e.radius, newStart, newEnd, color);
 	}
+	if (e.type === "ELLIPSE") return [{ kind: "line", pts: ellipsePoints(refl(e.center), refl(e.majorAxisEndpoint), e.ratio, e.startAngle, e.endAngle), color, dashed: true }];
 	if (e.type === "TEXT" || e.type === "MTEXT") return [{ kind: "marker", at: refl(e.position), style: "square", color, sizePx: 6 }];
 	return [];
 }
@@ -145,6 +149,11 @@ function gripsOf(e: RenderEntity): Grip[] {
 		case "CIRCLE":
 		case "ARC":
 			return [{ mode: "whole", point: e.center }];
+		case "ELLIPSE":
+			return [
+				{ mode: "whole", point: e.center },
+				{ mode: "vertex", pairIndex: 1, point: e.majorAxisEndpoint },
+			];
 		case "TEXT":
 		case "MTEXT":
 			return [{ mode: "whole", point: e.position }];
@@ -348,6 +357,25 @@ export class SelectTool implements Tool {
 	}
 }
 
+/** Click an entity to select every other entity sharing its type + layer. */
+export class SelectSimilarTool implements Tool {
+	readonly id: ToolId = "select-similar";
+	readonly panWithLeftDrag = false;
+	constructor(private ctx: ToolContext) {}
+	pointer(phase: string, world: Point2): void {
+		if (phase !== "down") return;
+		const id = this.ctx.pick(world);
+		const doc = this.ctx.doc();
+		const seed = id ? doc?.getEntity(id) : undefined;
+		if (!doc || !seed) return;
+		const matches = doc.entities.filter((e) => e.type === seed.type && e.layer === seed.layer && !doc.isHidden(e.id)).map((e) => e.id);
+		this.ctx.selectMany(matches);
+	}
+	hint(): string {
+		return "Click an entity to select every entity of the same type on the same layer";
+	}
+}
+
 /** The nearest characteristic point of an entity to a world point, within tol. */
 function nearestGrip(e: RenderEntity, world: Point2, tol: number): Point2 | null {
 	let best: Point2 | null = null;
@@ -379,6 +407,11 @@ function outlineTranslated(e: RenderEntity, dx: number, dy: number): OverlayPrim
 	if (pts) return [{ kind: "line", pts: pts.map((p) => ({ x: p.x + dx, y: p.y + dy })), dashed: true }];
 	if (e.type === "CIRCLE" || e.type === "ARC")
 		return [{ kind: "circle", center: { x: e.center.x + dx, y: e.center.y + dy }, radius: e.radius, dashed: true }];
+	if (e.type === "ELLIPSE") {
+		const c = { x: e.center.x + dx, y: e.center.y + dy };
+		const m = { x: e.majorAxisEndpoint.x + dx, y: e.majorAxisEndpoint.y + dy };
+		return [{ kind: "line", pts: ellipsePoints(c, m, e.ratio, e.startAngle, e.endAngle), dashed: true }];
+	}
 	if (e.type === "TEXT" || e.type === "MTEXT")
 		return [{ kind: "marker", at: { x: e.position.x + dx, y: e.position.y + dy }, style: "square", sizePx: 6 }];
 	return [];
@@ -393,6 +426,9 @@ function outlineWithVertex(e: RenderEntity, pairIndex: number, np: Point2): Over
 		const pts = e.vertices.map((v, i) => (i === pairIndex ? np : v));
 		if (e.closed && pts.length) pts.push(pts[0]);
 		return [{ kind: "line", pts, dashed: true }];
+	}
+	if (e.type === "ELLIPSE" && pairIndex === 1) {
+		return [{ kind: "line", pts: ellipsePoints(e.center, np, e.ratio, e.startAngle, e.endAngle), dashed: true }];
 	}
 	return [];
 }
@@ -530,6 +566,63 @@ export class MeasureAngleTool implements Tool {
 	}
 	hint(): string {
 		return "Click three points (side, vertex, side) to measure an angle";
+	}
+}
+
+export class MeasureAreaTool implements Tool {
+	readonly id: ToolId = "measure-area";
+	readonly panWithLeftDrag = false;
+	constructor(private ctx: ToolContext) {}
+	pointer(phase: string, world: Point2): void {
+		if (phase !== "down") {
+			const { prim } = snapMarker(this.ctx, world);
+			this.ctx.setOverlay(prim ? [prim] : []);
+			return;
+		}
+		const id = this.ctx.pick(world);
+		const e = id ? this.ctx.doc()?.getEntity(id) : undefined;
+		const a = e ? entityArea(e) : null;
+		if (e && a) {
+			this.ctx.reportMeasurement({ kind: "area", area: a.area, perimeter: a.perimeter });
+			const prims: OverlayPrim[] = [];
+			if (e.type === "CIRCLE") prims.push({ kind: "circle", center: e.center, radius: e.radius, color: this.ctx.accent, dashed: true });
+			else if (e.type === "LWPOLYLINE" || e.type === "POLYLINE") prims.push({ kind: "line", pts: [...e.vertices, e.vertices[0]], color: this.ctx.accent, dashed: true });
+			const anchor = this.ctx.doc()?.anchorOf(id!) ?? world;
+			prims.push({ kind: "label", at: anchor, text: `A ${a.area.toFixed(3)} · P ${a.perimeter.toFixed(3)}`, color: this.ctx.accent });
+			this.ctx.setOverlay(prims);
+		} else {
+			this.ctx.reportMeasurement(null);
+			this.ctx.setOverlay([]);
+		}
+	}
+	hint(): string {
+		return "Click a circle or a closed polyline to read its area/perimeter";
+	}
+}
+
+export class MeasurePointTool implements Tool {
+	readonly id: ToolId = "measure-point";
+	readonly panWithLeftDrag = false;
+	constructor(private ctx: ToolContext) {}
+	pointer(phase: string, world: Point2): void {
+		const { p, prim } = snapMarker(this.ctx, world);
+		if (phase === "down") {
+			this.ctx.reportMeasurement({ kind: "point", x: p.x, y: p.y }, [p]);
+		}
+		const prims: OverlayPrim[] = [{ kind: "label", at: p, text: `(${p.x.toFixed(3)}, ${p.y.toFixed(3)})`, color: this.ctx.accent }];
+		if (prim) prims.push(prim);
+		this.ctx.setOverlay(prims);
+	}
+	key(ev: KeyboardEvent): boolean {
+		if (ev.key === "Escape") {
+			this.ctx.setOverlay([]);
+			this.ctx.reportMeasurement(null);
+			return true;
+		}
+		return false;
+	}
+	hint(): string {
+		return "Click a point to read its coordinates (ID point)";
 	}
 }
 
@@ -858,6 +951,78 @@ function arc3PSpec(start: Point2, mid: Point2, end: Point2, layer: string): (New
 	const a2 = angleDeg(c.center, end);
 	const [startAngle, endAngle] = angleInArc(a1, a0, a2) ? [a0, a2] : [a2, a0];
 	return { type: "ARC", layer, center: c.center, radius: c.radius, startAngle, endAngle };
+}
+
+/** Minor/major axis ratio implied by `p` sitting on the ellipse (perpendicular distance from the major axis, as a fraction of its length). Null if degenerate. */
+function minorRatio(center: Point2, majorEnd: Point2, p: Point2): number | null {
+	const mx = majorEnd.x - center.x, my = majorEnd.y - center.y;
+	const majorLen = Math.hypot(mx, my);
+	if (majorLen < 1e-9) return null;
+	const ux = mx / majorLen, uy = my / majorLen;
+	const px = p.x - center.x, py = p.y - center.y;
+	const perp = Math.abs(py * ux - px * uy);
+	const ratio = perp / majorLen;
+	return ratio > 1e-6 ? Math.min(ratio, 1) : null;
+}
+
+/** Draw a full ellipse: click the centre, the major-axis endpoint, then a point setting the minor-axis length. */
+export class DrawEllipseTool implements Tool {
+	readonly id: ToolId = "draw-ellipse";
+	readonly panWithLeftDrag = false;
+	private center: Point2 | null = null;
+	private majorEnd: Point2 | null = null;
+	constructor(private ctx: ToolContext) {}
+	deactivate(): void {
+		this.reset();
+	}
+	pointer(phase: string, world: Point2): void {
+		const { p, prim } = snapMarker(this.ctx, world);
+		if (phase === "down") {
+			if (!this.center) {
+				this.center = p;
+			} else if (!this.majorEnd) {
+				if (dist(this.center, p) > 1e-9) this.majorEnd = p;
+			} else {
+				const ratio = minorRatio(this.center, this.majorEnd, p);
+				if (ratio !== null) {
+					const spec: NewEntitySpec = { type: "ELLIPSE", layer: this.ctx.activeLayer(), center: this.center, majorAxisEndpoint: this.majorEnd, ratio };
+					const c = this.ctx.activeColor();
+					if (c !== null) spec.colorNumber = c;
+					this.ctx.execute(new AddEntityCommand(spec));
+				}
+				this.reset();
+				return;
+			}
+		}
+		const prims: OverlayPrim[] = [];
+		if (this.center && this.majorEnd) {
+			const ratio = minorRatio(this.center, this.majorEnd, p) ?? 0.0001;
+			prims.push({ kind: "line", pts: ellipsePoints(this.center, this.majorEnd, ratio, 0, 360), color: this.ctx.accent, dashed: true });
+			prims.push({ kind: "label", at: p, text: `ratio ${ratio.toFixed(3)}`, color: this.ctx.accent });
+		} else if (this.center) {
+			prims.push({ kind: "line", pts: [this.center, p], color: this.ctx.accent });
+			prims.push({ kind: "label", at: p, text: dist(this.center, p).toFixed(3), color: this.ctx.accent });
+		}
+		if (prim) prims.push(prim);
+		this.ctx.setOverlay(prims);
+	}
+	key(ev: KeyboardEvent): boolean {
+		if (ev.key === "Escape") {
+			this.reset();
+			return true;
+		}
+		return false;
+	}
+	private reset(): void {
+		this.center = null;
+		this.majorEnd = null;
+		this.ctx.setOverlay([]);
+	}
+	hint(): string {
+		if (this.majorEnd) return "Click a point to set the minor-axis length · Esc to cancel";
+		if (this.center) return "Click the major-axis endpoint · Esc to cancel";
+		return "Click the centre";
+	}
 }
 
 /**
@@ -1558,6 +1723,131 @@ export class MatchPropertiesTool implements Tool {
 	}
 }
 
+/**
+ * Merge the selected LINEs into one LWPOLYLINE. All selected editable entities
+ * must be LINEs, and must all link end-to-end into a single chain — partial
+ * joins are refused rather than silently dropping entities.
+ */
+export class JoinTool implements Tool {
+	readonly id: ToolId = "join";
+	readonly panWithLeftDrag = true;
+	constructor(private ctx: ToolContext) {}
+	activate(): void {
+		this.run();
+	}
+	pointer(phase: string): void {
+		if (phase === "down") this.run();
+	}
+	private run(): void {
+		const doc = this.ctx.doc();
+		if (!doc) return;
+		const ids = this.ctx.selectedIds().filter((id) => doc.isEditable(id));
+		const lines = ids.map((id) => doc.getEntity(id)).filter((e): e is LineEntity => !!e && e.type === "LINE");
+		if (lines.length < 2 || lines.length !== ids.length) return;
+		const tol = Math.max(this.ctx.pixelSize() * 4, 1e-6);
+		const result = joinLineChain(lines.map((l) => ({ start: l.start, end: l.end })), tol);
+		if (!result) return;
+		const cmds: Command[] = ids.map((id) => new DeleteCommand(id));
+		const spec: NewEntitySpec = { type: "LWPOLYLINE", layer: lines[0].layer, vertices: result.vertices, closed: result.closed };
+		if (lines[0].colorNumber !== undefined) spec.colorNumber = lines[0].colorNumber;
+		cmds.push(new AddEntityCommand(spec));
+		this.ctx.execute(new BatchCommand(cmds, "Join"));
+	}
+	hint(): string {
+		return "Select 2+ end-to-end LINEs, then click the canvas to join them into one polyline";
+	}
+}
+
+/** The point on finite segment a-b nearest `p` (clamped to the segment). */
+function nearestPointOnSegment(p: Point2, a: Point2, b: Point2): Point2 {
+	const dx = b.x - a.x, dy = b.y - a.y;
+	const len2 = dx * dx + dy * dy;
+	if (len2 < 1e-18) return { ...a };
+	const t = Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2));
+	return { x: a.x + t * dx, y: a.y + t * dy };
+}
+
+/** True if angle `a` is within `eps` degrees of `b` (wraparound-aware). */
+function angleNear(a: number, b: number, eps = 1e-3): boolean {
+	const d = norm360(a - b);
+	return d < eps || d > 360 - eps;
+}
+
+/** Split a LINE or ARC into two entities at a clicked point (CIRCLE isn't supported — it has no natural endpoint to split from). */
+export class BreakTool implements Tool {
+	readonly id: ToolId = "break";
+	readonly panWithLeftDrag = false;
+	constructor(private ctx: ToolContext) {}
+	pointer(phase: string, world: Point2): void {
+		if (phase !== "down") {
+			const { prim } = snapMarker(this.ctx, world);
+			this.ctx.setOverlay(prim ? [prim] : []);
+			return;
+		}
+		const doc = this.ctx.doc();
+		const id = this.ctx.pick(world);
+		const e = id ? doc?.getEntity(id) : undefined;
+		if (!doc || !e || !id || !doc.isEditable(id)) return;
+		const { p } = snapMarker(this.ctx, world);
+		if (e.type === "LINE") {
+			const bp = nearestPointOnSegment(p, e.start, e.end);
+			if (dist(bp, e.start) < 1e-6 || dist(bp, e.end) < 1e-6) return;
+			const spec1: NewEntitySpec = { type: "LINE", layer: e.layer, start: e.start, end: bp };
+			const spec2: NewEntitySpec = { type: "LINE", layer: e.layer, start: bp, end: e.end };
+			if (e.colorNumber !== undefined) { spec1.colorNumber = e.colorNumber; spec2.colorNumber = e.colorNumber; }
+			this.ctx.execute(new BatchCommand([new DeleteCommand(id), new AddEntityCommand(spec1), new AddEntityCommand(spec2)], "Break"));
+		} else if (e.type === "ARC") {
+			const a = angleDeg(e.center, p);
+			if (!angleInArc(a, e.startAngle, e.endAngle) || angleNear(a, e.startAngle) || angleNear(a, e.endAngle)) return;
+			const spec1: NewEntitySpec = { type: "ARC", layer: e.layer, center: e.center, radius: e.radius, startAngle: e.startAngle, endAngle: a };
+			const spec2: NewEntitySpec = { type: "ARC", layer: e.layer, center: e.center, radius: e.radius, startAngle: a, endAngle: e.endAngle };
+			if (e.colorNumber !== undefined) { spec1.colorNumber = e.colorNumber; spec2.colorNumber = e.colorNumber; }
+			this.ctx.execute(new BatchCommand([new DeleteCommand(id), new AddEntityCommand(spec1), new AddEntityCommand(spec2)], "Break"));
+		}
+	}
+	hint(): string {
+		return "Click a point on a LINE or ARC to split it there";
+	}
+}
+
+/** Convert selected LWPOLYLINEs into individual LINE segments. */
+export class ExplodeTool implements Tool {
+	readonly id: ToolId = "explode";
+	readonly panWithLeftDrag = true;
+	constructor(private ctx: ToolContext) {}
+	activate(): void {
+		this.run();
+	}
+	pointer(phase: string): void {
+		if (phase === "down") this.run();
+	}
+	private run(): void {
+		const doc = this.ctx.doc();
+		if (!doc) return;
+		const cmds: Command[] = [];
+		for (const id of this.ctx.selectedIds().filter((i) => doc.isEditable(i))) {
+			const e = doc.getEntity(id);
+			if (!e || (e.type !== "LWPOLYLINE" && e.type !== "POLYLINE")) continue;
+			const v = e.vertices;
+			for (let i = 0; i < v.length - 1; i++) {
+				const spec: NewEntitySpec = { type: "LINE", layer: e.layer, start: v[i], end: v[i + 1] };
+				if (e.colorNumber !== undefined) spec.colorNumber = e.colorNumber;
+				cmds.push(new AddEntityCommand(spec));
+			}
+			if (e.closed && v.length > 2) {
+				const spec: NewEntitySpec = { type: "LINE", layer: e.layer, start: v[v.length - 1], end: v[0] };
+				if (e.colorNumber !== undefined) spec.colorNumber = e.colorNumber;
+				cmds.push(new AddEntityCommand(spec));
+			}
+			cmds.push(new DeleteCommand(id));
+		}
+		if (cmds.length) this.ctx.execute(new BatchCommand(cmds, "Explode"));
+	}
+	hint(): string {
+		return "Select one or more polylines, then click the canvas to explode them into lines";
+	}
+}
+
 export class DrawPolylineTool implements Tool {
 	readonly id: ToolId = "draw-polyline";
 	readonly panWithLeftDrag = false;
@@ -1803,19 +2093,115 @@ export class AnnotateTool implements Tool {
 	}
 }
 
+/**
+ * Draw a linear dimension: click the two points to measure, then click to place
+ * the dimension line. Builds plain LINE/LWPOLYLINE(arrowhead)/TEXT entities as
+ * one grouped undo step — not a parametric DXF DIMENSION entity, so it renders
+ * identically everywhere and stays editable with the ordinary tools.
+ */
+export class DimensionLinearTool implements Tool {
+	readonly id: ToolId = "dimension-linear";
+	readonly panWithLeftDrag = false;
+	private p1: Point2 | null = null;
+	private p2: Point2 | null = null;
+	constructor(private ctx: ToolContext) {}
+	deactivate(): void {
+		this.reset();
+	}
+	pointer(phase: string, world: Point2): void {
+		const { p, prim } = snapMarker(this.ctx, world);
+		if (phase === "down") {
+			if (!this.p1) {
+				this.p1 = p;
+			} else if (!this.p2) {
+				if (dist(this.p1, p) > 1e-9) this.p2 = p;
+			} else {
+				this.commit(this.p1, this.p2, p);
+				this.reset();
+				return;
+			}
+		}
+		const prims: OverlayPrim[] = [];
+		if (this.p1 && this.p2) {
+			const g = buildLinearDimension(this.p1, this.p2, p, this.ctx.pixelSize() * 10, this.ctx.pixelSize() * 14);
+			if (g) {
+				prims.push({ kind: "line", pts: g.extLine1, color: this.ctx.accent, dashed: true });
+				prims.push({ kind: "line", pts: g.extLine2, color: this.ctx.accent, dashed: true });
+				prims.push({ kind: "line", pts: g.dimLine, color: this.ctx.accent });
+				prims.push({ kind: "line", pts: g.arrow1, color: this.ctx.accent, closed: true });
+				prims.push({ kind: "line", pts: g.arrow2, color: this.ctx.accent, closed: true });
+				prims.push({ kind: "label", at: g.textPos, text: g.length.toFixed(3), color: this.ctx.accent });
+			}
+		} else if (this.p1) {
+			prims.push({ kind: "line", pts: [this.p1, p], color: this.ctx.accent, dashed: true });
+			prims.push({ kind: "label", at: p, text: dist(this.p1, p).toFixed(3), color: this.ctx.accent });
+		}
+		if (prim) prims.push(prim);
+		this.ctx.setOverlay(prims);
+	}
+	private commit(p1: Point2, p2: Point2, through: Point2): void {
+		const g = buildLinearDimension(p1, p2, through, this.ctx.pixelSize() * 10, this.ctx.pixelSize() * 14);
+		if (!g) return;
+		const layer = this.ctx.activeLayer();
+		const aci = this.ctx.activeColor();
+		const line = (a: Point2, b: Point2): NewEntitySpec => {
+			const spec: NewEntitySpec = { type: "LINE", layer, start: a, end: b };
+			if (aci !== null) spec.colorNumber = aci;
+			return spec;
+		};
+		const tri = (pts: [Point2, Point2, Point2]): NewEntitySpec => {
+			const spec: NewEntitySpec = { type: "LWPOLYLINE", layer, vertices: pts, closed: true };
+			if (aci !== null) spec.colorNumber = aci;
+			return spec;
+		};
+		const textSpec: NewEntitySpec = { type: "TEXT", layer, position: g.textPos, height: this.ctx.pixelSize() * 16, rotation: g.textRotation, text: g.length.toFixed(3) };
+		if (aci !== null) textSpec.colorNumber = aci;
+		const cmds: Command[] = [
+			new AddEntityCommand(line(g.extLine1[0], g.extLine1[1])),
+			new AddEntityCommand(line(g.extLine2[0], g.extLine2[1])),
+			new AddEntityCommand(line(g.dimLine[0], g.dimLine[1])),
+			new AddEntityCommand(tri(g.arrow1)),
+			new AddEntityCommand(tri(g.arrow2)),
+			new AddEntityCommand(textSpec),
+		];
+		this.ctx.execute(new BatchCommand(cmds, "Dimension"));
+	}
+	key(ev: KeyboardEvent): boolean {
+		if (ev.key === "Escape") {
+			this.reset();
+			return true;
+		}
+		return false;
+	}
+	private reset(): void {
+		this.p1 = null;
+		this.p2 = null;
+		this.ctx.setOverlay([]);
+	}
+	hint(): string {
+		if (this.p2) return "Click to place the dimension line · Esc to cancel";
+		if (this.p1) return "Click the second point to measure · Esc to cancel";
+		return "Click the first point to measure";
+	}
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function createTools(ctx: ToolContext): Record<ToolId, Tool> {
 	return {
 		"select": new SelectTool(ctx),
+		"select-similar": new SelectSimilarTool(ctx),
 		"measure-distance": new MeasureDistanceTool(ctx),
 		"measure-radius": new MeasureRadiusTool(ctx),
 		"measure-angle": new MeasureAngleTool(ctx),
+		"measure-area": new MeasureAreaTool(ctx),
+		"measure-point": new MeasurePointTool(ctx),
 		"draw-line": new DrawLineTool(ctx),
 		"draw-circle": new DrawCircleTool(ctx),
 		"draw-circle-2p": new DrawCircle2PTool(ctx),
 		"draw-circle-3p": new DrawCircle3PTool(ctx),
 		"draw-arc": new DrawArcTool(ctx),
 		"draw-arc-3p": new DrawArc3PTool(ctx),
+		"draw-ellipse": new DrawEllipseTool(ctx),
 		"draw-polyline": new DrawPolylineTool(ctx),
 		"draw-rectangle": new DrawRectangleTool(ctx),
 		"draw-polygon": new DrawPolygonTool(ctx),
@@ -1832,6 +2218,10 @@ export function createTools(ctx: ToolContext): Record<ToolId, Tool> {
 		"array-rect": new RectArrayTool(ctx),
 		"array-polar": new PolarArrayTool(ctx),
 		"match-props": new MatchPropertiesTool(ctx),
+		"join": new JoinTool(ctx),
+		"break": new BreakTool(ctx),
+		"explode": new ExplodeTool(ctx),
+		"dimension-linear": new DimensionLinearTool(ctx),
 		"annotate": new AnnotateTool(ctx),
 	};
 }

@@ -12,8 +12,14 @@ import {
 	trimLinePoint,
 	extendLinePoint,
 	trimArcAngle,
+	entityLength,
+	entityArea,
+	joinLineChain,
+	ellipsePoints,
+	isFullEllipseSweep,
+	buildLinearDimension,
 } from "../src/core/geom/geometry2d";
-import type { LineEntity, CircleEntity, ArcEntity, PolylineEntity } from "../src/core/model/types";
+import type { LineEntity, CircleEntity, ArcEntity, PolylineEntity, EllipseEntity } from "../src/core/model/types";
 
 describe("circumcircle", () => {
 	it("finds the centre/radius of a circle through three points", () => {
@@ -196,5 +202,121 @@ describe("trimLinePoint / extendLinePoint / trimArcAngle", () => {
 		const angle = trimArcAngle({ x: 0, y: 0 }, 5, 0, 90, true, cutter);
 		expect(angle).not.toBeNull();
 		expect(angle!).toBeCloseTo((Math.acos(3 / 5) * 180) / Math.PI, 4);
+	});
+});
+
+describe("entityLength / entityArea", () => {
+	it("sums a LINE's straight-line length", () => {
+		const line: LineEntity = { id: "L", type: "LINE", layer: "0", color: 0, start: { x: 0, y: 0 }, end: { x: 3, y: 4 } };
+		expect(entityLength(line)).toBeCloseTo(5, 6);
+	});
+
+	it("computes a CIRCLE's circumference and area", () => {
+		const circle: CircleEntity = { id: "C", type: "CIRCLE", layer: "0", color: 0, center: { x: 0, y: 0 }, radius: 2 };
+		expect(entityLength(circle)).toBeCloseTo(2 * Math.PI * 2, 6);
+		expect(entityArea(circle)?.area).toBeCloseTo(Math.PI * 4, 6);
+	});
+
+	it("computes an ARC's arc-length from its sweep", () => {
+		const arc: ArcEntity = { id: "A", type: "ARC", layer: "0", color: 0, center: { x: 0, y: 0 }, radius: 2, startAngle: 0, endAngle: 90 };
+		expect(entityLength(arc)).toBeCloseTo((Math.PI / 2) * 2, 6);
+	});
+
+	it("computes a closed polyline's area via the shoelace formula and returns null for an open one", () => {
+		const square: PolylineEntity = {
+			id: "P", type: "LWPOLYLINE", layer: "0", color: 0, closed: true,
+			vertices: [{ x: 0, y: 0 }, { x: 4, y: 0 }, { x: 4, y: 3 }, { x: 0, y: 3 }],
+		};
+		expect(entityArea(square)?.area).toBeCloseTo(12, 6);
+		expect(entityArea(square)?.perimeter).toBeCloseTo(14, 6);
+		expect(entityArea({ ...square, closed: false })).toBeNull();
+	});
+});
+
+describe("joinLineChain", () => {
+	it("chains segments given out of order and in mixed directions into one open polyline", () => {
+		const segs = [
+			{ start: { x: 10, y: 0 }, end: { x: 20, y: 0 } }, // middle, forward
+			{ start: { x: 0, y: 0 }, end: { x: 10, y: 0 } }, // first, forward
+			{ start: { x: 30, y: 0 }, end: { x: 20, y: 0 } }, // last, reversed
+		];
+		const result = joinLineChain(segs, 1e-6);
+		expect(result).not.toBeNull();
+		expect(result!.closed).toBe(false);
+		expect(result!.vertices).toEqual([{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 20, y: 0 }, { x: 30, y: 0 }]);
+	});
+
+	it("detects a closed loop and drops the duplicated closing vertex", () => {
+		const segs = [
+			{ start: { x: 0, y: 0 }, end: { x: 10, y: 0 } },
+			{ start: { x: 10, y: 0 }, end: { x: 10, y: 10 } },
+			{ start: { x: 10, y: 10 }, end: { x: 0, y: 10 } },
+			{ start: { x: 0, y: 10 }, end: { x: 0, y: 0 } },
+		];
+		const result = joinLineChain(segs, 1e-6);
+		expect(result).not.toBeNull();
+		expect(result!.closed).toBe(true);
+		expect(result!.vertices).toHaveLength(4);
+	});
+
+	it("returns null when the segments don't form a single connected chain", () => {
+		const segs = [
+			{ start: { x: 0, y: 0 }, end: { x: 10, y: 0 } },
+			{ start: { x: 100, y: 100 }, end: { x: 110, y: 100 } }, // disconnected
+		];
+		expect(joinLineChain(segs, 1e-6)).toBeNull();
+	});
+});
+
+describe("ellipsePoints / isFullEllipseSweep", () => {
+	it("detects a full sweep (0/360) vs a partial one", () => {
+		expect(isFullEllipseSweep(0, 360)).toBe(true);
+		expect(isFullEllipseSweep(0, 180)).toBe(false);
+	});
+
+	it("samples the major- and minor-axis endpoints at t=0 and t=90deg", () => {
+		const pts = ellipsePoints({ x: 0, y: 0 }, { x: 4, y: 0 }, 0.5, 0, 360, 4);
+		// steps=4 over a full 360deg sweep: t = 0, 90, 180, 270, 360(=0).
+		expect(pts[0]).toEqual({ x: 4, y: 0 }); // major axis endpoint (t=0)
+		expect(pts[1].x).toBeCloseTo(0, 6);
+		expect(pts[1].y).toBeCloseTo(2, 6); // minor axis endpoint: ratio(0.5) * major radius(4) = 2
+	});
+
+	it("computes an ELLIPSE's area/perimeter via entityArea only when it's a full sweep", () => {
+		const ellipse: EllipseEntity = {
+			id: "E", type: "ELLIPSE", layer: "0", color: 0,
+			center: { x: 0, y: 0 }, majorAxisEndpoint: { x: 4, y: 0 }, ratio: 0.5, startAngle: 0, endAngle: 360,
+		};
+		expect(entityArea(ellipse)?.area).toBeCloseTo(Math.PI * 4 * 2, 6);
+		expect(entityArea({ ...ellipse, endAngle: 180 })).toBeNull();
+	});
+});
+
+describe("buildLinearDimension", () => {
+	it("places the dimension line offset toward the third point, with arrows at each end and centred, upright text", () => {
+		const g = buildLinearDimension({ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 5, y: 3 }, 1, 1);
+		expect(g).not.toBeNull();
+		expect(g!.length).toBeCloseTo(10, 6);
+		// dimension line is offset toward the third point (positive y), parallel to p1-p2.
+		expect(g!.dimLine[0].y).toBeCloseTo(3, 6);
+		expect(g!.dimLine[1].y).toBeCloseTo(3, 6);
+		expect(g!.dimLine[0].x).toBeCloseTo(0, 6);
+		expect(g!.dimLine[1].x).toBeCloseTo(10, 6);
+		// arrow tips sit exactly at the dimension line's endpoints.
+		expect(g!.arrow1[0]).toEqual(g!.dimLine[0]);
+		expect(g!.arrow2[0]).toEqual(g!.dimLine[1]);
+		// text sits above the dimension line, at the horizontal midpoint, upright (0deg for a horizontal dimension).
+		expect(g!.textPos.x).toBeCloseTo(5, 6);
+		expect(g!.textPos.y).toBeGreaterThan(3);
+		expect(g!.textRotation).toBeCloseTo(0, 6);
+	});
+
+	it("flips text rotation to stay upright when the dimension runs right-to-left", () => {
+		const g = buildLinearDimension({ x: 10, y: 0 }, { x: 0, y: 0 }, { x: 5, y: 3 }, 1, 1);
+		expect(g!.textRotation).toBeCloseTo(0, 6);
+	});
+
+	it("returns null for coincident points", () => {
+		expect(buildLinearDimension({ x: 1, y: 1 }, { x: 1, y: 1 }, { x: 2, y: 2 }, 1, 1)).toBeNull();
 	});
 });

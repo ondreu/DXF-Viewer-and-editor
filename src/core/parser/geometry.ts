@@ -123,6 +123,24 @@ function buildEntity(
 			}
 			return { ...base, type: "ARC", center, radius: e.radius, startAngle, endAngle };
 		}
+		case "ELLIPSE": {
+			if (!e.center) return null;
+			const center = w(e.center);
+			const axisVec = e.majorAxisEndPoint ?? { x: 1, y: 0, z: 0 };
+			// Transform the endpoint through the same OCS map, then re-derive the
+			// world-space vector — correct for both default and tilted/mirrored
+			// extrusion normals (dxf-parser leaves group 11 untransformed).
+			const majorEndW = w({ x: (e.center.x ?? 0) + (axisVec.x ?? 0), y: (e.center.y ?? 0) + (axisVec.y ?? 0), z: e.center.z ?? 0 });
+			return {
+				...base,
+				type: "ELLIPSE",
+				center,
+				majorAxisEndpoint: majorEndW,
+				ratio: e.axisRatio ?? 1,
+				startAngle: radToDeg(e.startAngle ?? 0),
+				endAngle: radToDeg(e.endAngle ?? Math.PI * 2),
+			};
+		}
 		case "LWPOLYLINE":
 		case "POLYLINE": {
 			const elevation = e.elevation ?? 0;

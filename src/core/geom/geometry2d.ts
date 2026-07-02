@@ -15,6 +15,104 @@ export function angleInArc(a: number, start: number, end: number): boolean {
 	return rel <= sweep + 1e-6;
 }
 
+/** Perimeter/arc-length of a single entity (0 for point-like or unsupported types). */
+export function entityLength(e: RenderEntity): number {
+	switch (e.type) {
+		case "LINE":
+			return dist(e.start, e.end);
+		case "CIRCLE":
+			return 2 * Math.PI * e.radius;
+		case "ARC":
+			return e.radius * ((norm360(e.endAngle - e.startAngle) || 360) * Math.PI) / 180;
+		case "LWPOLYLINE":
+		case "POLYLINE": {
+			let total = 0;
+			for (let i = 0; i < e.vertices.length - 1; i++) total += dist(e.vertices[i], e.vertices[i + 1]);
+			if (e.closed && e.vertices.length > 2) total += dist(e.vertices[e.vertices.length - 1], e.vertices[0]);
+			return total;
+		}
+		case "ELLIPSE": {
+			const pts = ellipsePoints(e.center, e.majorAxisEndpoint, e.ratio, e.startAngle, e.endAngle);
+			let total = 0;
+			for (let i = 0; i < pts.length - 1; i++) total += dist(pts[i], pts[i + 1]);
+			return total;
+		}
+		default:
+			return 0;
+	}
+}
+
+/** Area + perimeter of a closed shape (CIRCLE, full ELLIPSE, or closed LWPOLYLINE/POLYLINE), or null if `e` isn't closed. */
+export function entityArea(e: RenderEntity): { area: number; perimeter: number } | null {
+	if (e.type === "CIRCLE") return { area: Math.PI * e.radius * e.radius, perimeter: entityLength(e) };
+	if (e.type === "ELLIPSE" && isFullEllipseSweep(e.startAngle, e.endAngle)) {
+		const major = dist(e.center, e.majorAxisEndpoint);
+		const minor = major * e.ratio;
+		return { area: Math.PI * major * minor, perimeter: entityLength(e) };
+	}
+	if ((e.type === "LWPOLYLINE" || e.type === "POLYLINE") && e.closed && e.vertices.length >= 3) {
+		const v = e.vertices;
+		let twiceArea = 0;
+		for (let i = 0; i < v.length; i++) {
+			const a = v[i], b = v[(i + 1) % v.length];
+			twiceArea += a.x * b.y - b.x * a.y;
+		}
+		return { area: Math.abs(twiceArea) / 2, perimeter: entityLength(e) };
+	}
+	return null;
+}
+
+/** True when a start/end sweep (deg) describes a full ellipse rather than a partial arc. */
+export function isFullEllipseSweep(startDeg: number, endDeg: number): boolean {
+	return Math.abs(norm360(endDeg - startDeg)) < 1e-6;
+}
+
+/** Sample points along an ellipse (or elliptical arc) for rendering, picking and preview overlays. */
+export function ellipsePoints(center: Point2, majorAxisEndpoint: Point2, ratio: number, startDeg: number, endDeg: number, steps = 64): Point2[] {
+	const mx = majorAxisEndpoint.x - center.x, my = majorAxisEndpoint.y - center.y;
+	const full = isFullEllipseSweep(startDeg, endDeg);
+	const start = (startDeg * Math.PI) / 180;
+	let sweep = full ? Math.PI * 2 : ((endDeg - startDeg) * Math.PI) / 180;
+	if (!full && sweep <= 0) sweep += Math.PI * 2;
+	const pts: Point2[] = [];
+	for (let i = 0; i <= steps; i++) {
+		const t = start + (sweep * i) / steps;
+		const cos = Math.cos(t), sin = Math.sin(t);
+		pts.push({ x: center.x + mx * cos - my * ratio * sin, y: center.y + my * cos + mx * ratio * sin });
+	}
+	return pts;
+}
+
+/**
+ * Chain a set of LINE segments end-to-end into a single open/closed polyline
+ * (for the Join tool). Segments may be given in any order and either
+ * direction. Returns null unless *every* segment links into one connected
+ * chain — a partial/branching join is left for the caller to reject rather
+ * than silently dropping entities.
+ */
+export function joinLineChain(segments: Array<{ start: Point2; end: Point2 }>, tol: number): { vertices: Point2[]; closed: boolean } | null {
+	if (segments.length < 2) return null;
+	const remaining = segments.slice(1);
+	let chain: Point2[] = [segments[0].start, segments[0].end];
+	const close = (a: Point2, b: Point2) => dist(a, b) <= tol;
+	let progress = true;
+	while (remaining.length && progress) {
+		progress = false;
+		for (let i = 0; i < remaining.length; i++) {
+			const s = remaining[i];
+			const head = chain[0], tail = chain[chain.length - 1];
+			if (close(tail, s.start)) { chain.push(s.end); remaining.splice(i, 1); progress = true; break; }
+			if (close(tail, s.end)) { chain.push(s.start); remaining.splice(i, 1); progress = true; break; }
+			if (close(head, s.end)) { chain.unshift(s.start); remaining.splice(i, 1); progress = true; break; }
+			if (close(head, s.start)) { chain.unshift(s.end); remaining.splice(i, 1); progress = true; break; }
+		}
+	}
+	if (remaining.length) return null;
+	const closed = chain.length > 2 && close(chain[0], chain[chain.length - 1]);
+	if (closed) chain = chain.slice(0, -1);
+	return { vertices: chain, closed };
+}
+
 /** Circumcircle of three points, or null if they're (near-)collinear. */
 export function circumcircle(a: Point2, b: Point2, c: Point2): { center: Point2; radius: number } | null {
 	const d = 2 * (a.x * (b.y - c.y) + b.x * (c.y - a.y) + c.x * (a.y - b.y));
@@ -277,4 +375,55 @@ export function trimArcAngle(center: Point2, radius: number, startAngle: number,
 		.filter((h) => h.t > 1e-6 && h.t < 1 - 1e-6);
 	if (!candidates.length) return null;
 	return candidates.reduce((a, b) => (b.t > a.t ? b : a)).angleDeg;
+}
+
+export interface LinearDimensionGeometry {
+	extLine1: [Point2, Point2];
+	extLine2: [Point2, Point2];
+	dimLine: [Point2, Point2];
+	arrow1: [Point2, Point2, Point2];
+	arrow2: [Point2, Point2, Point2];
+	textPos: Point2;
+	/** degrees, kept within (-90, 90] so the text stays upright/readable */
+	textRotation: number;
+	length: number;
+}
+
+/**
+ * Geometry for a linear dimension between p1 and p2, offset out to the line
+ * through `through` (the third click that places the dimension line). Not a
+ * parametric DXF DIMENSION entity — this builds plain LINE/LWPOLYLINE/TEXT
+ * geometry that renders identically everywhere and stays editable with the
+ * ordinary tools.
+ */
+export function buildLinearDimension(p1: Point2, p2: Point2, through: Point2, arrowSize: number, textGap: number): LinearDimensionGeometry | null {
+	const dx = p2.x - p1.x, dy = p2.y - p1.y;
+	const length = Math.hypot(dx, dy);
+	if (length < 1e-9) return null;
+	const ux = dx / length, uy = dy / length;
+	const nx = -uy, ny = ux;
+	const offset = (through.x - p1.x) * nx + (through.y - p1.y) * ny;
+	const d1: Point2 = { x: p1.x + nx * offset, y: p1.y + ny * offset };
+	const d2: Point2 = { x: p2.x + nx * offset, y: p2.y + ny * offset };
+	const arrow = (tip: Point2, dirX: number, dirY: number): [Point2, Point2, Point2] => {
+		const baseX = tip.x + dirX * arrowSize, baseY = tip.y + dirY * arrowSize;
+		const halfW = arrowSize * 0.35;
+		const px = -dirY * halfW, py = dirX * halfW;
+		return [tip, { x: baseX + px, y: baseY + py }, { x: baseX - px, y: baseY - py }];
+	};
+	const mid: Point2 = { x: (d1.x + d2.x) / 2, y: (d1.y + d2.y) / 2 };
+	const sign = offset >= 0 ? 1 : -1;
+	let textRotation = (Math.atan2(uy, ux) * 180) / Math.PI;
+	if (textRotation > 90) textRotation -= 180;
+	else if (textRotation <= -90) textRotation += 180;
+	return {
+		extLine1: [p1, d1],
+		extLine2: [p2, d2],
+		dimLine: [d1, d2],
+		arrow1: arrow(d1, ux, uy),
+		arrow2: arrow(d2, -ux, -uy),
+		textPos: { x: mid.x + nx * textGap * sign, y: mid.y + ny * textGap * sign },
+		textRotation,
+		length,
+	};
 }

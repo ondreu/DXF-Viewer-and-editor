@@ -34,6 +34,14 @@ export function entityToTags(e: RenderEntity, handle: string): DxfTag[] | null {
 			tags.push({ code: 50, value: fmtReal(e.startAngle) });
 			tags.push({ code: 51, value: fmtReal(e.endAngle) });
 			return tags;
+		case "ELLIPSE":
+			pt(e.center.x, e.center.y, 10, 20, 30);
+			// group 11/21/31 is the major-axis endpoint *relative to the centre*.
+			pt(e.majorAxisEndpoint.x - e.center.x, e.majorAxisEndpoint.y - e.center.y, 11, 21, 31);
+			tags.push({ code: 40, value: fmtReal(e.ratio) });
+			tags.push({ code: 41, value: fmtReal((e.startAngle * Math.PI) / 180) });
+			tags.push({ code: 42, value: fmtReal((e.endAngle * Math.PI) / 180) });
+			return tags;
 		case "LWPOLYLINE":
 			tags.push({ code: 90, value: String(e.vertices.length) });
 			tags.push({ code: 70, value: e.closed ? "1" : "0" });

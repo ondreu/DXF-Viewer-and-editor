@@ -20,7 +20,7 @@ import {
 } from "../src/core/command/commands";
 import { tokenize } from "../src/core/parser/tokenizer";
 import { computeSnap, DEFAULT_SNAP } from "../src/interaction/snap";
-import type { ArcEntity, CircleEntity, TextEntity, LineEntity, PolylineEntity } from "../src/core/model/types";
+import type { ArcEntity, CircleEntity, TextEntity, LineEntity, PolylineEntity, EllipseEntity } from "../src/core/model/types";
 
 const FIXTURE = readFileSync(resolve(__dirname, "../fixtures/simple.dxf"), "utf-8");
 const tagPairs = (t: string) => tokenize(t).tags.map((x) => `${x.code}=${x.value}`).join("\n");
@@ -198,6 +198,68 @@ describe("BatchCommand", () => {
 		expect(line.end).toEqual(beforeLine.end);
 		expect(circle.center).toEqual(beforeCircle);
 		expect(tagPairs(doc.serialize())).toBe(tagPairs(FIXTURE));
+	});
+});
+
+describe("ELLIPSE", () => {
+	const ELLIPSE_DXF = [
+		"0", "SECTION", "2", "ENTITIES",
+		"0", "ELLIPSE", "5", "500", "8", "0",
+		"10", "10.0", "20", "10.0", "30", "0.0",
+		"11", "5.0", "21", "0.0", "31", "0.0",
+		"40", "0.5", "41", "0.0", "42", "6.283185307179586",
+		"0", "ENDSEC", "0", "EOF",
+	].join("\n");
+
+	it("parses centre/major-axis-endpoint/ratio, and a pure translate leaves the relative axis vector unchanged", () => {
+		const doc = DxfDocument.fromResult(parseDxf(ELLIPSE_DXF));
+		const ellipse = doc.entities.find((e) => e.type === "ELLIPSE") as EllipseEntity;
+		expect(ellipse.center).toEqual({ x: 10, y: 10 });
+		expect(ellipse.majorAxisEndpoint).toEqual({ x: 15, y: 10 });
+		expect(ellipse.ratio).toBeCloseTo(0.5, 6);
+
+		const stack = new CommandStack(doc);
+		stack.execute(new MoveCommand(ellipse.id, 3, -2));
+		expect(ellipse.center).toEqual({ x: 13, y: 8 });
+		expect(ellipse.majorAxisEndpoint).toEqual({ x: 18, y: 8 });
+
+		// This is the fiddly bit: DXF stores the major-axis endpoint (group 11) as a
+		// vector *relative* to the centre, so re-serializing after a whole-entity
+		// move must NOT also shift that raw group-11 value.
+		const re = parseDxf(doc.serialize());
+		const moved = re.entities.find((e) => e.type === "ELLIPSE") as EllipseEntity;
+		expect(moved.center).toEqual({ x: 13, y: 8 });
+		expect(moved.majorAxisEndpoint.x - moved.center.x).toBeCloseTo(5, 6);
+		expect(moved.majorAxisEndpoint.y - moved.center.y).toBeCloseTo(0, 6);
+
+		stack.undo();
+		const back = parseDxf(doc.serialize());
+		const backE = back.entities.find((e) => e.type === "ELLIPSE") as EllipseEntity;
+		expect(backE.center).toEqual({ x: 10, y: 10 });
+		expect(backE.majorAxisEndpoint).toEqual({ x: 15, y: 10 });
+	});
+
+	it("rotates an ellipse about its centre, reorienting the major axis", () => {
+		const doc = DxfDocument.fromResult(parseDxf(ELLIPSE_DXF));
+		const ellipse = doc.entities.find((e) => e.type === "ELLIPSE") as EllipseEntity;
+		const stack = new CommandStack(doc);
+		stack.execute(new RotateCommand([ellipse.id], ellipse.center.x, ellipse.center.y, 90));
+		// (15,10) rotated 90deg CCW about (10,10) -> (10,15)
+		expect(ellipse.majorAxisEndpoint.x).toBeCloseTo(10, 6);
+		expect(ellipse.majorAxisEndpoint.y).toBeCloseTo(15, 6);
+		expect(ellipse.center).toEqual({ x: 10, y: 10 });
+	});
+
+	it("draws a new ellipse via AddEntityCommand and round-trips it", () => {
+		const doc = DxfDocument.fromResult(parseDxf(ELLIPSE_DXF));
+		const stack = new CommandStack(doc);
+		stack.execute(new AddEntityCommand({ type: "ELLIPSE", layer: "0", center: { x: 0, y: 0 }, majorAxisEndpoint: { x: 4, y: 0 }, ratio: 0.25 }));
+		const re = parseDxf(doc.serialize());
+		const added = re.entities.filter((e) => e.type === "ELLIPSE").pop() as EllipseEntity;
+		expect(added.center).toEqual({ x: 0, y: 0 });
+		expect(added.majorAxisEndpoint.x).toBeCloseTo(4, 6);
+		expect(added.majorAxisEndpoint.y).toBeCloseTo(0, 6);
+		expect(added.ratio).toBeCloseTo(0.25, 6);
 	});
 });
 

@@ -78,6 +78,8 @@ function endpointsOf(e: RenderEntity): Point2[] {
 				{ x: e.center.x + e.radius * Math.cos(t), y: e.center.y + e.radius * Math.sin(t) },
 			];
 		}
+		case "ELLIPSE":
+			return [e.majorAxisEndpoint];
 		default:
 			return [];
 	}
@@ -101,7 +103,7 @@ function midpointsOf(e: RenderEntity): Point2[] {
 }
 
 function centerOf(e: RenderEntity): Point2 | null {
-	return e.type === "CIRCLE" || e.type === "ARC" ? e.center : null;
+	return e.type === "CIRCLE" || e.type === "ARC" || e.type === "ELLIPSE" ? e.center : null;
 }
 
 function quadrantsOf(e: RenderEntity): Point2[] {
