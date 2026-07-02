@@ -14,8 +14,12 @@ export type ToolId =
 	| "draw-circle"
 	| "draw-arc"
 	| "draw-polyline"
+	| "draw-rectangle"
 	| "draw-text"
 	| "rotate"
+	| "scale"
+	| "mirror"
+	| "copy"
 	| "annotate";
 
 export type Measurement =

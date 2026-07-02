@@ -1,5 +1,5 @@
 import type { DxfDocument, PropPatch, LayerPatch } from "../model/DxfDocument";
-import type { NewEntitySpec, Point2 } from "../model/types";
+import type { NewEntitySpec, Point2, RenderEntity } from "../model/types";
 
 /**
  * A reversible edit. Commands are the *only* way the document is mutated, so
@@ -143,6 +143,81 @@ export class RotateCommand implements Command {
 	}
 	undo(doc: DxfDocument): void {
 		for (const id of this.ids) doc.rotate(id, this.cx, this.cy, -this.deg);
+	}
+}
+
+/** Scale one or more entities by a common factor about a shared pivot. */
+export class ScaleCommand implements Command {
+	readonly label = "Scale";
+	constructor(
+		private readonly ids: string[],
+		private readonly cx: number,
+		private readonly cy: number,
+		private readonly factor: number
+	) {}
+	do(doc: DxfDocument): void {
+		for (const id of this.ids) doc.scale(id, this.cx, this.cy, this.factor);
+	}
+	undo(doc: DxfDocument): void {
+		for (const id of this.ids) doc.scale(id, this.cx, this.cy, 1 / this.factor);
+	}
+}
+
+/** Mirror one or more entities across a shared line; mirroring twice is exact undo. */
+export class MirrorCommand implements Command {
+	readonly label = "Mirror";
+	constructor(
+		private readonly ids: string[],
+		private readonly ax: number,
+		private readonly ay: number,
+		private readonly bx: number,
+		private readonly by: number
+	) {}
+	do(doc: DxfDocument): void {
+		for (const id of this.ids) doc.mirror(id, this.ax, this.ay, this.bx, this.by);
+	}
+	undo(doc: DxfDocument): void {
+		for (const id of this.ids) doc.mirror(id, this.ax, this.ay, this.bx, this.by);
+	}
+}
+
+/** Build a draw spec that duplicates `e`'s geometry offset by (dx, dy). */
+function specFromEntity(e: RenderEntity, dx: number, dy: number): NewEntitySpec | null {
+	const shift = (p: Point2): Point2 => ({ x: p.x + dx, y: p.y + dy });
+	switch (e.type) {
+		case "LINE":
+			return { type: "LINE", layer: e.layer, colorNumber: e.colorNumber, start: shift(e.start), end: shift(e.end) };
+		case "CIRCLE":
+			return { type: "CIRCLE", layer: e.layer, colorNumber: e.colorNumber, center: shift(e.center), radius: e.radius };
+		case "ARC":
+			return { type: "ARC", layer: e.layer, colorNumber: e.colorNumber, center: shift(e.center), radius: e.radius, startAngle: e.startAngle, endAngle: e.endAngle };
+		case "LWPOLYLINE":
+			return { type: "LWPOLYLINE", layer: e.layer, colorNumber: e.colorNumber, vertices: e.vertices.map(shift), closed: e.closed };
+		case "TEXT":
+			return { type: "TEXT", layer: e.layer, colorNumber: e.colorNumber, position: shift(e.position), height: e.height, rotation: e.rotation, text: e.text };
+		default:
+			return null;
+	}
+}
+
+/** Duplicate one or more entities offset by (dx, dy) — the same handles redo onto. */
+export class CopyCommand implements Command {
+	readonly label = "Copy";
+	private handles: (string | null)[] = [];
+	constructor(private readonly ids: string[], private readonly dx: number, private readonly dy: number) {}
+	do(doc: DxfDocument): void {
+		this.handles = this.ids.map((id, i) => {
+			const e = doc.getEntity(id);
+			const spec = e ? specFromEntity(e, this.dx, this.dy) : null;
+			if (!spec) return null;
+			return doc.addEntity(spec, this.handles[i] ?? undefined);
+		});
+	}
+	undo(doc: DxfDocument): void {
+		for (const h of this.handles) if (h) doc.removeAdded(h);
+	}
+	get createdHandles(): string[] {
+		return this.handles.filter((h): h is string => !!h);
 	}
 }
 

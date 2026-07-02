@@ -9,12 +9,15 @@ import {
 	SetPropsCommand,
 	SetAnchorCommand,
 	RotateCommand,
+	ScaleCommand,
+	MirrorCommand,
+	CopyCommand,
 	AddLayerCommand,
 	UpdateLayerCommand,
 } from "../src/core/command/commands";
 import { tokenize } from "../src/core/parser/tokenizer";
 import { computeSnap, DEFAULT_SNAP } from "../src/interaction/snap";
-import type { ArcEntity, CircleEntity, TextEntity, LineEntity } from "../src/core/model/types";
+import type { ArcEntity, CircleEntity, TextEntity, LineEntity, PolylineEntity } from "../src/core/model/types";
 
 const FIXTURE = readFileSync(resolve(__dirname, "../fixtures/simple.dxf"), "utf-8");
 const tagPairs = (t: string) => tokenize(t).tags.map((x) => `${x.code}=${x.value}`).join("\n");
@@ -80,6 +83,94 @@ describe("rotation", () => {
 		const stack = new CommandStack(doc);
 		stack.execute(new RotateCommand([text.id], text.position.x, text.position.y, 45));
 		expect(text.rotation).toBeCloseTo((before + 45) % 360, 6);
+	});
+});
+
+describe("scale", () => {
+	it("scales a circle's centre and radius about a pivot, and undoes exactly", () => {
+		const doc = load();
+		const circle = doc.entities.find((e) => e.type === "CIRCLE") as CircleEntity;
+		const stack = new CommandStack(doc);
+		// centre (50,50), radius 25; scale 2x about the origin.
+		stack.execute(new ScaleCommand([circle.id], 0, 0, 2));
+		expect(circle.center).toEqual({ x: 100, y: 100 });
+		expect(circle.radius).toBe(50);
+		stack.undo();
+		expect(tagPairs(doc.serialize())).toBe(tagPairs(FIXTURE));
+	});
+
+	it("scales a LINE's endpoints about a pivot", () => {
+		const doc = load();
+		const line = doc.entities.find((e) => e.type === "LINE") as LineEntity;
+		const stack = new CommandStack(doc);
+		// original: start (0,0) end (100,50); scale 0.5x about (0,0).
+		stack.execute(new ScaleCommand([line.id], 0, 0, 0.5));
+		expect(line.start).toEqual({ x: 0, y: 0 });
+		expect(line.end.x).toBeCloseTo(50, 6);
+		expect(line.end.y).toBeCloseTo(25, 6);
+	});
+});
+
+describe("mirror", () => {
+	it("mirrors a line across the Y axis and undoes (mirror twice) exactly", () => {
+		const doc = load();
+		const line = doc.entities.find((e) => e.type === "LINE") as LineEntity;
+		const stack = new CommandStack(doc);
+		// mirror line: x = 0 (points (0,0)-(0,1))
+		stack.execute(new MirrorCommand([line.id], 0, 0, 0, 1));
+		expect(line.start.x).toBeCloseTo(0, 6);
+		expect(line.end.x).toBeCloseTo(-100, 6);
+		expect(line.end.y).toBeCloseTo(50, 6);
+		stack.undo();
+		expect(tagPairs(doc.serialize())).toBe(tagPairs(FIXTURE));
+	});
+
+	it("mirrors an ARC and swaps start/end angles to keep the CCW convention", () => {
+		const doc = load();
+		const stack = new CommandStack(doc);
+		stack.execute(new AddEntityCommand({ type: "ARC", layer: "0", center: { x: 0, y: 0 }, radius: 5, startAngle: 0, endAngle: 90 }));
+		const arc = doc.entities.find((e) => e.type === "ARC") as ArcEntity;
+		// mirror across the X axis (y = 0): quarter circle in Q1 becomes Q4.
+		stack.execute(new MirrorCommand([arc.id], 0, 0, 1, 0));
+		expect(arc.startAngle).toBeCloseTo(270, 6);
+		expect(arc.endAngle).toBeCloseTo(0, 6);
+	});
+});
+
+describe("copy", () => {
+	it("duplicates a line offset by (dx, dy), leaving the original untouched", () => {
+		const doc = load();
+		const line = doc.entities.find((e) => e.type === "LINE") as LineEntity;
+		const before = { start: { ...line.start }, end: { ...line.end } };
+		const stack = new CommandStack(doc);
+		const cmd = new CopyCommand([line.id], 10, 20);
+		stack.execute(cmd);
+		expect(line.start).toEqual(before.start);
+		expect(line.end).toEqual(before.end);
+		const [newId] = cmd.createdHandles;
+		const copy = doc.getEntity(newId) as LineEntity;
+		expect(copy.start).toEqual({ x: before.start.x + 10, y: before.start.y + 20 });
+		expect(copy.end).toEqual({ x: before.end.x + 10, y: before.end.y + 20 });
+		stack.undo();
+		expect(doc.getEntity(newId)).toBeUndefined();
+		expect(tagPairs(doc.serialize())).toBe(tagPairs(FIXTURE));
+	});
+});
+
+describe("rectangle drawing (closed LWPOLYLINE)", () => {
+	it("round-trips a rectangle as a closed 4-vertex polyline", () => {
+		const doc = load();
+		const stack = new CommandStack(doc);
+		stack.execute(new AddEntityCommand({
+			type: "LWPOLYLINE",
+			layer: "0",
+			closed: true,
+			vertices: [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 5 }, { x: 0, y: 5 }],
+		}));
+		const re = parseDxf(doc.serialize());
+		const rect = re.entities.filter((e) => e.type === "LWPOLYLINE").pop() as PolylineEntity;
+		expect(rect.closed).toBe(true);
+		expect(rect.vertices).toEqual([{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 5 }, { x: 0, y: 5 }]);
 	});
 });
 

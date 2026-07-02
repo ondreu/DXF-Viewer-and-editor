@@ -1,9 +1,9 @@
 {
   "id": "dxf-viewer-editor",
   "name": "DXF Viewer & Editor",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "minAppVersion": "1.5.0",
-  "description": "View, measure, draw and edit DXF drawings — layers, rotation, arcs, multi-select and precise properties — as file views and note embeds, on desktop and mobile.",
+  "description": "View, measure, draw and edit DXF drawings — layers, copy/rotate/scale/mirror, arcs, rectangles, multi-select and precise properties — as file views and note embeds, on desktop and mobile.",
   "author": "ondreu",
   "authorUrl": "https://github.com/ondreu/dxf-viewer-and-editor",
   "isDesktopOnly": false

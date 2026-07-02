@@ -19,9 +19,15 @@
 			{ id: "draw-circle", name: "circle", label: "Draw circle" },
 			{ id: "draw-arc", name: "spline-pointer", label: "Draw arc" },
 			{ id: "draw-polyline", name: "spline", label: "Draw polyline" },
+			{ id: "draw-rectangle", name: "rectangle-horizontal", label: "Draw rectangle" },
 			{ id: "draw-text", name: "type", label: "Add text" },
 		],
-		[{ id: "rotate", name: "rotate-cw", label: "Rotate selection" }],
+		[
+			{ id: "copy", name: "copy", label: "Copy selection" },
+			{ id: "rotate", name: "rotate-cw", label: "Rotate selection" },
+			{ id: "scale", name: "maximize-2", label: "Scale selection" },
+			{ id: "mirror", name: "flip-horizontal", label: "Mirror selection" },
+		],
 		[{ id: "annotate", name: "sticky-note", label: "Add note (annotation)" }],
 	];
 </script>

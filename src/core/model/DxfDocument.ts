@@ -336,6 +336,54 @@ export class DxfDocument {
 		}
 	}
 
+	/** Scale an entity by `factor` about (cx, cy); also scales radius/text height. */
+	scale(id: string, cx: number, cy: number, factor: number): void {
+		const e = this.byId.get(id);
+		if (!e || !(factor > 0)) return;
+		for (const idx of vertexIndices(e)) {
+			const pt = vertexOf(e, idx);
+			if (!pt) continue;
+			const nx = cx + (pt.x - cx) * factor;
+			const ny = cy + (pt.y - cy) * factor;
+			this.moveVertex(id, idx, nx - pt.x, ny - pt.y);
+		}
+		if (e.type === "CIRCLE" || e.type === "ARC") {
+			this.setProps(id, { radius: e.radius * factor });
+		} else if (e.type === "TEXT" || e.type === "MTEXT") {
+			this.setProps(id, { height: e.height * factor });
+		}
+	}
+
+	/** Mirror an entity across the line through (ax, ay)-(bx, by). */
+	mirror(id: string, ax: number, ay: number, bx: number, by: number): void {
+		const e = this.byId.get(id);
+		if (!e) return;
+		const lx = bx - ax, ly = by - ay;
+		const len2 = lx * lx + ly * ly;
+		if (len2 < 1e-12) return;
+		const reflect = (p: Point2): { dx: number; dy: number } => {
+			const vx = p.x - ax, vy = p.y - ay;
+			const t = (vx * lx + vy * ly) / len2;
+			const fx = ax + t * lx, fy = ay + t * ly;
+			const nx = 2 * fx - p.x, ny = 2 * fy - p.y;
+			return { dx: nx - p.x, dy: ny - p.y };
+		};
+		for (const idx of vertexIndices(e)) {
+			const pt = vertexOf(e, idx);
+			if (!pt) continue;
+			const { dx, dy } = reflect(pt);
+			this.moveVertex(id, idx, dx, dy);
+		}
+		if (e.type === "ARC") {
+			// Reflecting reverses the sweep direction, so the new CCW start/end
+			// are the mirrored *directions* of the old end/start respectively.
+			const theta = (Math.atan2(ly, lx) * 180) / Math.PI;
+			const newStart = norm360(2 * theta - e.endAngle);
+			const newEnd = norm360(2 * theta - e.startAngle);
+			this.setProps(id, { startAngle: newStart, endAngle: newEnd });
+		}
+	}
+
 	/** Anchor point used to attach annotations to an entity. */
 	anchorOf(id: string): Point2 | null {
 		const e = this.byId.get(id);

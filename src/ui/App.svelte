@@ -36,6 +36,7 @@
 		<span class="dxf-top-sep" />
 		<button class="dxf-icon-btn" title="Undo" disabled={!state.canUndo} on:click={() => controller.undo()} use:icon={"undo-2"} />
 		<button class="dxf-icon-btn" title="Redo" disabled={!state.canRedo} on:click={() => controller.redo()} use:icon={"redo-2"} />
+		<button class="dxf-icon-btn" title="Delete selection (Del)" disabled={state.selectionCount === 0} on:click={() => controller.deleteSelected()} use:icon={"trash-2"} />
 		<span class="dxf-top-sep" />
 		<button class="dxf-icon-btn" class:is-active={showLayers} title="Layers & draw settings" on:click={() => (showLayers = !showLayers)} use:icon={"layers"} />
 		<button class="dxf-icon-btn" class:is-active={showAnnotations} title="Annotations" on:click={() => (showAnnotations = !showAnnotations)} use:icon={"sticky-note"} />

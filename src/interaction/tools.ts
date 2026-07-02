@@ -1,7 +1,7 @@
 import type { Tool, ToolContext, ToolId } from "./types";
 import type { Point2, NewEntitySpec, RenderEntity } from "../core/model/types";
 import type { OverlayPrim } from "../render/overlay";
-import { AddEntityCommand, MoveCommand, MoveVertexCommand, RotateCommand } from "../core/command/commands";
+import { AddEntityCommand, MoveCommand, MoveVertexCommand, RotateCommand, ScaleCommand, MirrorCommand, CopyCommand } from "../core/command/commands";
 import { AnnotationStore } from "../core/annotation/AnnotationStore";
 
 function snapMarker(ctx: ToolContext, world: Point2): { p: Point2; prim: OverlayPrim | null } {
@@ -60,6 +60,44 @@ function outlineRotated(e: RenderEntity, pivot: Point2, deg: number, color: numb
 	if (e.type === "CIRCLE") return [{ kind: "circle", center: rot(e.center), radius: e.radius, color, dashed: true }];
 	if (e.type === "ARC") return arcOutline(rot(e.center), e.radius, e.startAngle + deg, e.endAngle + deg, color);
 	if (e.type === "TEXT" || e.type === "MTEXT") return [{ kind: "marker", at: rot(e.position), style: "square", color, sizePx: 6 }];
+	return [];
+}
+
+/** Dashed preview of an entity scaled by `factor` about a pivot (for the scale tool). */
+function outlineScaled(e: RenderEntity, pivot: Point2, factor: number, color: number): OverlayPrim[] {
+	const scale = (p: Point2): Point2 => ({ x: pivot.x + (p.x - pivot.x) * factor, y: pivot.y + (p.y - pivot.y) * factor });
+	const pts = outlinePoints(e);
+	if (pts) return [{ kind: "line", pts: pts.map(scale), color, dashed: true }];
+	if (e.type === "CIRCLE") return [{ kind: "circle", center: scale(e.center), radius: e.radius * factor, color, dashed: true }];
+	if (e.type === "ARC") return arcOutline(scale(e.center), e.radius * factor, e.startAngle, e.endAngle, color);
+	if (e.type === "TEXT" || e.type === "MTEXT") return [{ kind: "marker", at: scale(e.position), style: "square", color, sizePx: 6 }];
+	return [];
+}
+
+/** Reflect a point across the line through `a`-`b`. */
+function reflectPoint(p: Point2, a: Point2, b: Point2): Point2 {
+	const lx = b.x - a.x, ly = b.y - a.y;
+	const len2 = lx * lx + ly * ly;
+	if (len2 < 1e-12) return p;
+	const vx = p.x - a.x, vy = p.y - a.y;
+	const t = (vx * lx + vy * ly) / len2;
+	const fx = a.x + t * lx, fy = a.y + t * ly;
+	return { x: 2 * fx - p.x, y: 2 * fy - p.y };
+}
+
+/** Dashed preview of an entity mirrored across line `a`-`b` (for the mirror tool). */
+function outlineMirrored(e: RenderEntity, a: Point2, b: Point2, color: number): OverlayPrim[] {
+	const refl = (p: Point2) => reflectPoint(p, a, b);
+	const pts = outlinePoints(e);
+	if (pts) return [{ kind: "line", pts: pts.map(refl), color, dashed: true }];
+	if (e.type === "CIRCLE") return [{ kind: "circle", center: refl(e.center), radius: e.radius, color, dashed: true }];
+	if (e.type === "ARC") {
+		const theta = (Math.atan2(b.y - a.y, b.x - a.x) * 180) / Math.PI;
+		const newStart = norm360(2 * theta - e.endAngle);
+		const newEnd = norm360(2 * theta - e.startAngle);
+		return arcOutline(refl(e.center), e.radius, newStart, newEnd, color);
+	}
+	if (e.type === "TEXT" || e.type === "MTEXT") return [{ kind: "marker", at: refl(e.position), style: "square", color, sizePx: 6 }];
 	return [];
 }
 
@@ -706,6 +744,179 @@ export class RotateTool implements Tool {
 	}
 }
 
+/**
+ * Scale the current selection about a pivot: click a pivot, then move to set
+ * the factor (the first move position becomes the 1.0× reference distance),
+ * click again to commit. Mirrors RotateTool's interaction shape.
+ */
+export class ScaleTool implements Tool {
+	readonly id: ToolId = "scale";
+	readonly panWithLeftDrag = false;
+	private pivot: Point2 | null = null;
+	private refDist: number | null = null;
+	constructor(private ctx: ToolContext) {}
+	deactivate(): void {
+		this.reset();
+	}
+	pointer(phase: string, world: Point2): void {
+		const { p, prim } = snapMarker(this.ctx, world);
+		if (phase === "down") {
+			if (!this.pivot) {
+				this.pivot = p;
+				this.refDist = null;
+				this.ctx.setOverlay([{ kind: "marker", at: p, style: "circle", color: this.ctx.accent, sizePx: 7 }]);
+				return;
+			}
+			const factor = this.currentFactor(p);
+			const ids = this.ctx.selectedIds().filter((id) => this.ctx.doc()?.isEditable(id));
+			if (ids.length && Math.abs(factor - 1) > 1e-6) this.ctx.execute(new ScaleCommand(ids, this.pivot.x, this.pivot.y, factor));
+			this.reset();
+			return;
+		}
+		if (phase === "move" && this.pivot) {
+			const factor = this.currentFactor(p);
+			const prims: OverlayPrim[] = [
+				{ kind: "marker", at: this.pivot, style: "circle", color: this.ctx.accent, sizePx: 7 },
+				{ kind: "line", pts: [this.pivot, p], color: this.ctx.accent, dashed: true },
+				{ kind: "label", at: p, text: `× ${factor.toFixed(3)}`, color: this.ctx.accent },
+			];
+			const doc = this.ctx.doc();
+			for (const id of this.ctx.selectedIds()) {
+				const e = doc?.getEntity(id);
+				if (e) prims.push(...outlineScaled(e, this.pivot, factor, this.ctx.accent));
+			}
+			this.ctx.setOverlay(prims);
+			return;
+		}
+		this.ctx.setOverlay(this.pivot ? [{ kind: "marker", at: this.pivot, style: "circle", color: this.ctx.accent, sizePx: 7 }] : prim ? [prim] : []);
+	}
+	private currentFactor(p: Point2): number {
+		if (!this.pivot) return 1;
+		const d = dist(this.pivot, p);
+		if (this.refDist === null) {
+			this.refDist = Math.max(d, 1e-6);
+			return 1;
+		}
+		return d / this.refDist;
+	}
+	key(ev: KeyboardEvent): boolean {
+		if (ev.key === "Escape") {
+			this.reset();
+			return true;
+		}
+		return false;
+	}
+	private reset(): void {
+		this.pivot = null;
+		this.refDist = null;
+		this.ctx.setOverlay([]);
+	}
+	hint(): string {
+		return "Select entities first · click a pivot, move to set the scale, click to commit · Esc to cancel";
+	}
+}
+
+/** Mirror the current selection across a line defined by two clicks. */
+export class MirrorTool implements Tool {
+	readonly id: ToolId = "mirror";
+	readonly panWithLeftDrag = false;
+	private p1: Point2 | null = null;
+	constructor(private ctx: ToolContext) {}
+	deactivate(): void {
+		this.reset();
+	}
+	pointer(phase: string, world: Point2): void {
+		const { p, prim } = snapMarker(this.ctx, world);
+		if (phase === "down") {
+			if (!this.p1) {
+				this.p1 = p;
+			} else {
+				const ids = this.ctx.selectedIds().filter((id) => this.ctx.doc()?.isEditable(id));
+				if (ids.length && dist(this.p1, p) > 1e-9) this.ctx.execute(new MirrorCommand(ids, this.p1.x, this.p1.y, p.x, p.y));
+				this.reset();
+				return;
+			}
+		}
+		const prims: OverlayPrim[] = [];
+		if (this.p1) {
+			prims.push({ kind: "line", pts: [this.p1, p], color: this.ctx.accent, dashed: true });
+			const doc = this.ctx.doc();
+			for (const id of this.ctx.selectedIds()) {
+				const e = doc?.getEntity(id);
+				if (e) prims.push(...outlineMirrored(e, this.p1, p, this.ctx.accent));
+			}
+		}
+		if (prim) prims.push(prim);
+		this.ctx.setOverlay(prims);
+	}
+	key(ev: KeyboardEvent): boolean {
+		if (ev.key === "Escape") {
+			this.reset();
+			return true;
+		}
+		return false;
+	}
+	private reset(): void {
+		this.p1 = null;
+		this.ctx.setOverlay([]);
+	}
+	hint(): string {
+		return "Select entities first · click two points on the mirror line · Esc to cancel";
+	}
+}
+
+/** Duplicate the current selection: click a base point, then the destination. */
+export class CopyTool implements Tool {
+	readonly id: ToolId = "copy";
+	readonly panWithLeftDrag = false;
+	private base: Point2 | null = null;
+	constructor(private ctx: ToolContext) {}
+	deactivate(): void {
+		this.reset();
+	}
+	pointer(phase: string, world: Point2): void {
+		const { p, prim } = snapMarker(this.ctx, world);
+		if (phase === "down") {
+			if (!this.base) {
+				this.base = p;
+			} else {
+				const dx = p.x - this.base.x, dy = p.y - this.base.y;
+				const ids = this.ctx.selectedIds().filter((id) => this.ctx.doc()?.isEditable(id));
+				if (ids.length && (dx || dy)) this.ctx.execute(new CopyCommand(ids, dx, dy));
+				this.reset();
+				return;
+			}
+		}
+		const prims: OverlayPrim[] = [];
+		if (this.base) {
+			const dx = p.x - this.base.x, dy = p.y - this.base.y;
+			const doc = this.ctx.doc();
+			for (const id of this.ctx.selectedIds()) {
+				const e = doc?.getEntity(id);
+				if (e) prims.push(...outlineTranslated(e, dx, dy));
+			}
+			prims.push({ kind: "line", pts: [this.base, p], color: this.ctx.accent, dashed: true });
+			prims.push({ kind: "label", at: p, text: dist(this.base, p).toFixed(3), color: this.ctx.accent });
+		}
+		if (prim) prims.push(prim);
+		this.ctx.setOverlay(prims);
+	}
+	key(ev: KeyboardEvent): boolean {
+		if (ev.key === "Escape") {
+			this.reset();
+			return true;
+		}
+		return false;
+	}
+	private reset(): void {
+		this.base = null;
+		this.ctx.setOverlay([]);
+	}
+	hint(): string {
+		return "Select entities first · click a base point, then the destination · Esc to cancel";
+	}
+}
+
 export class DrawPolylineTool implements Tool {
 	readonly id: ToolId = "draw-polyline";
 	readonly panWithLeftDrag = false;
@@ -779,6 +990,61 @@ export class DrawPolylineTool implements Tool {
 	}
 }
 
+/** Two opposite corners define an axis-aligned rectangle, written as a closed LWPOLYLINE. */
+function rectVertices(a: Point2, b: Point2): Point2[] {
+	return [a, { x: b.x, y: a.y }, b, { x: a.x, y: b.y }];
+}
+
+export class DrawRectangleTool implements Tool {
+	readonly id: ToolId = "draw-rectangle";
+	readonly panWithLeftDrag = false;
+	private corner: Point2 | null = null;
+	constructor(private ctx: ToolContext) {}
+	deactivate(): void {
+		this.reset();
+	}
+	pointer(phase: string, world: Point2): void {
+		const { p, prim } = snapMarker(this.ctx, world);
+		if (phase === "down") {
+			if (!this.corner) this.corner = p;
+			else {
+				this.commit(this.corner, p);
+				this.corner = null;
+			}
+		}
+		const prims: OverlayPrim[] = [];
+		if (this.corner) {
+			const pts = rectVertices(this.corner, p);
+			prims.push({ kind: "line", pts: [...pts, pts[0]], color: this.ctx.accent, dashed: true });
+			const w = Math.abs(p.x - this.corner.x), h = Math.abs(p.y - this.corner.y);
+			prims.push({ kind: "label", at: p, text: `${w.toFixed(3)} × ${h.toFixed(3)}`, color: this.ctx.accent });
+		}
+		if (prim) prims.push(prim);
+		this.ctx.setOverlay(prims);
+	}
+	private commit(a: Point2, b: Point2): void {
+		if (Math.abs(b.x - a.x) < 1e-9 || Math.abs(b.y - a.y) < 1e-9) return;
+		const spec: NewEntitySpec = { type: "LWPOLYLINE", layer: this.ctx.activeLayer(), vertices: rectVertices(a, b), closed: true };
+		const c = this.ctx.activeColor();
+		if (c !== null) spec.colorNumber = c;
+		this.ctx.execute(new AddEntityCommand(spec));
+	}
+	key(ev: KeyboardEvent): boolean {
+		if (ev.key === "Escape") {
+			this.reset();
+			return true;
+		}
+		return false;
+	}
+	private reset(): void {
+		this.corner = null;
+		this.ctx.setOverlay([]);
+	}
+	hint(): string {
+		return "Click one corner, then the opposite corner · Esc to cancel";
+	}
+}
+
 export class TextTool implements Tool {
 	readonly id: ToolId = "draw-text";
 	readonly panWithLeftDrag = false;
@@ -835,8 +1101,12 @@ export function createTools(ctx: ToolContext): Record<ToolId, Tool> {
 		"draw-circle": new DrawCircleTool(ctx),
 		"draw-arc": new DrawArcTool(ctx),
 		"draw-polyline": new DrawPolylineTool(ctx),
+		"draw-rectangle": new DrawRectangleTool(ctx),
 		"draw-text": new TextTool(ctx),
 		"rotate": new RotateTool(ctx),
+		"scale": new ScaleTool(ctx),
+		"mirror": new MirrorTool(ctx),
+		"copy": new CopyTool(ctx),
 		"annotate": new AnnotateTool(ctx),
 	};
 }

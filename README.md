@@ -26,16 +26,19 @@ This is **v1: DXF only**. DWG is intentionally out of scope (see
 - **Measure** — distance (with Δx/Δy and angle), radius/diameter/circumference,
   and three-point angle, shown in a floating readout. Measurements can be saved
   as visible annotations.
-- **Draw** — line, circle, **arc**, polyline and text. Drawn geometry becomes
-  **real DXF entities** written back to the file on save.
-- **Editing** — move, rotate, delete, and change the layer/colour of `LINE`,
-  `CIRCLE`, `ARC`, `LWPOLYLINE` and `TEXT` entities, with undo/redo.
+- **Draw** — line, circle, **arc**, polyline, **rectangle** and text. Drawn
+  geometry becomes **real DXF entities** written back to the file on save.
+- **Editing** — move, copy, rotate, scale, mirror, delete, and change the
+  layer/colour of `LINE`, `CIRCLE`, `ARC`, `LWPOLYLINE` and `TEXT` entities,
+  with undo/redo.
 - **Multi-select** — `Ctrl`/`Cmd`+click to add entities to the selection; move,
-  rotate, delete or recolour them all at once.
+  copy, rotate, scale, mirror, delete or recolour them all at once.
 - **Precise properties** — edit exact position (X/Y), radius, arc start/end
   angles, and text height/rotation/content from the Properties card.
-- **Rotation** — a rotate tool (pick a pivot, spin), plus 90° quick-rotate
-  buttons, working on single entities or a whole multi-selection.
+- **Transform tools** — rotate (pick a pivot, spin) with 90° quick-rotate
+  buttons, scale (pivot + drag factor), mirror (pick a mirror line) and copy
+  (base point + destination), working on single entities or a whole
+  multi-selection.
 - **Layer management** — add layers and set their colour, linetype and
   lineweight; **hide/show** and **freeze/thaw** layers. Edits are written back
   into the DXF `LAYER` table on save.
@@ -55,9 +58,10 @@ This is **v1: DXF only**. DWG is intentionally out of scope (see
 ### Interface
 
 - **Left palette**: select · measure (distance / radius / angle) · draw (line /
-  circle / arc / polyline / text) · rotate · note.
+  circle / arc / polyline / rectangle / text) · copy / rotate / scale / mirror ·
+  note.
 - **Top bar**: fit · grid toggle · snap toggle · screenshot · undo · redo ·
-  layers · annotations · save (a dot marks unsaved changes).
+  delete selection · layers · annotations · save (a dot marks unsaved changes).
 - **Keyboard**: `Esc` cancels the current tool operation, `Enter` finishes a
   polyline (`C` closes it), arrow keys nudge a selection, `Delete` removes it,
   `Ctrl/Cmd+S` saves, `Ctrl/Cmd+Z` / `Shift+Ctrl/Cmd+Z` undo/redo. `Ctrl`/`Cmd`
