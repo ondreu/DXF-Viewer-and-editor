@@ -1,0 +1,20 @@
+{
+  "extends": "@tsconfig/svelte/tsconfig.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "sourceMap": false,
+    "module": "ESNext",
+    "target": "ES2018",
+    "allowJs": true,
+    "noImplicitAny": true,
+    "moduleResolution": "bundler",
+    "importHelpers": true,
+    "isolatedModules": true,
+    "strictNullChecks": true,
+    "strict": true,
+    "lib": ["DOM", "DOM.Iterable", "ES2018", "WebWorker"],
+    "types": ["node", "svelte", "vitest/globals"]
+  },
+  "include": ["src/**/*.ts", "src/**/*.svelte", "tests/**/*.ts"],
+  "exclude": ["node_modules", "src/worker/inline.generated.ts"]
+}

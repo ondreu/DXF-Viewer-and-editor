@@ -1,0 +1,12 @@
+# build / deps
+node_modules/
+main.js
+main.js.map
+
+# generated
+src/worker/inline.generated.ts
+
+# editor / os
+.DS_Store
+*.log
+data.json
