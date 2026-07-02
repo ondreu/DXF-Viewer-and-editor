@@ -1,13 +1,18 @@
 import type { Tool, ToolContext, ToolId } from "./types";
 import type { Point2, NewEntitySpec, RenderEntity } from "../core/model/types";
 import type { OverlayPrim } from "../render/overlay";
-import { AddEntityCommand, MoveCommand, MoveVertexCommand } from "../core/command/commands";
+import { AddEntityCommand, MoveCommand, MoveVertexCommand, RotateCommand } from "../core/command/commands";
 import { AnnotationStore } from "../core/annotation/AnnotationStore";
 
 function snapMarker(ctx: ToolContext, world: Point2): { p: Point2; prim: OverlayPrim | null } {
 	const s = ctx.snap(world);
 	if (!s) return { p: world, prim: null };
-	const style = s.type === "grid" ? "dot" : s.type === "center" ? "circle" : s.type === "midpoint" ? "triangle" : "square";
+	const style =
+		s.type === "grid" ? "dot"
+		: s.type === "center" ? "circle"
+		: s.type === "midpoint" ? "triangle"
+		: s.type === "extension" ? "diamond"
+		: "square";
 	return { p: s.point, prim: { kind: "marker", at: s.point, style, color: ctx.accent, sizePx: 7 } };
 }
 
@@ -16,6 +21,46 @@ function dist(a: Point2, b: Point2): number {
 }
 function norm360(deg: number): number {
 	return ((deg % 360) + 360) % 360;
+}
+function norm180(deg: number): number {
+	let d = norm360(deg);
+	if (d > 180) d -= 360;
+	return d;
+}
+function angleDeg(c: Point2, p: Point2): number {
+	return norm360((Math.atan2(p.y - c.y, p.x - c.x) * 180) / Math.PI);
+}
+
+/** Dashed arc preview as a polyline between two angles (CCW). */
+function arcOutline(c: Point2, r: number, startDeg: number, endDeg: number, color: number): OverlayPrim[] {
+	const start = (startDeg * Math.PI) / 180;
+	let sweep = ((endDeg - startDeg) * Math.PI) / 180;
+	if (sweep <= 0) sweep += Math.PI * 2;
+	const pts: Point2[] = [];
+	const steps = 48;
+	for (let i = 0; i <= steps; i++) {
+		const a = start + (sweep * i) / steps;
+		pts.push({ x: c.x + r * Math.cos(a), y: c.y + r * Math.sin(a) });
+	}
+	return [{ kind: "line", pts, color, dashed: true }];
+}
+
+/** Dashed preview of an entity rotated `deg` about a pivot (for the rotate tool). */
+function outlineRotated(e: RenderEntity, pivot: Point2, deg: number, color: number): OverlayPrim[] {
+	const rad = (deg * Math.PI) / 180;
+	const cos = Math.cos(rad);
+	const sin = Math.sin(rad);
+	const rot = (p: Point2): Point2 => {
+		const ox = p.x - pivot.x;
+		const oy = p.y - pivot.y;
+		return { x: pivot.x + ox * cos - oy * sin, y: pivot.y + ox * sin + oy * cos };
+	};
+	const pts = outlinePoints(e);
+	if (pts) return [{ kind: "line", pts: pts.map(rot), color, dashed: true }];
+	if (e.type === "CIRCLE") return [{ kind: "circle", center: rot(e.center), radius: e.radius, color, dashed: true }];
+	if (e.type === "ARC") return arcOutline(rot(e.center), e.radius, e.startAngle + deg, e.endAngle + deg, color);
+	if (e.type === "TEXT" || e.type === "MTEXT") return [{ kind: "marker", at: rot(e.position), style: "square", color, sizePx: 6 }];
+	return [];
 }
 
 // ---------------------------------------------------------------------------
@@ -56,11 +101,14 @@ export class SelectTool implements Tool {
 	readonly id: ToolId = "select";
 	readonly panWithLeftDrag = true;
 	private drag: null | {
-		kind: "vertex" | "whole" | "annotation";
+		kind: "vertex" | "whole" | "group" | "annotation";
 		id: string;
+		ids?: string[];
 		pairIndex?: number;
 		gripOrigin: Point2;
 		cursorStart: Point2;
+		/** reference point that OSNAP targets snap onto during the move */
+		basePoint: Point2;
 	} = null;
 
 	constructor(private ctx: ToolContext) {}
@@ -69,11 +117,22 @@ export class SelectTool implements Tool {
 		if (phase === "down") return this.onDown(world);
 		if (phase === "move") return this.onMove(world, ev);
 		if (phase === "up") return this.onUp(world);
-		if (phase === "click") this.ctx.select(this.ctx.pick(world));
+		if (phase === "click") {
+			const id = this.ctx.pick(world);
+			if (ev && (ev.ctrlKey || ev.metaKey)) this.ctx.toggleSelection(id);
+			else this.ctx.select(id);
+		}
 	}
 
 	private tol(): number {
 		return this.ctx.pixelSize() * 10;
+	}
+
+	/** Snap the drag target, offset the whole geometry by (target - basePoint). */
+	private moveDelta(world: Point2, basePoint: Point2): { dx: number; dy: number; target: Point2 } {
+		const s = this.ctx.snap(world);
+		const target = s ? s.point : world;
+		return { dx: target.x - basePoint.x, dy: target.y - basePoint.y, target };
 	}
 
 	private onDown(world: Point2): boolean {
@@ -83,11 +142,22 @@ export class SelectTool implements Tool {
 		// 1. grab a note annotation?
 		const annoId = this.ctx.annotationAt(world);
 		if (annoId) {
-			this.drag = { kind: "annotation", id: annoId, gripOrigin: world, cursorStart: world };
+			this.drag = { kind: "annotation", id: annoId, gripOrigin: world, cursorStart: world, basePoint: world };
 			return true;
 		}
 
-		// 2. grab a grip / body of the selected editable entity?
+		const selIds = this.ctx.selectedIds().filter((id) => doc.isEditable(id));
+
+		// 2. multiple selected and grabbing one of them: move the whole group.
+		if (selIds.length > 1) {
+			const hit = this.ctx.pick(world);
+			if (hit && selIds.includes(hit)) {
+				this.drag = { kind: "group", id: hit, ids: selIds, gripOrigin: world, cursorStart: world, basePoint: world };
+				return true;
+			}
+		}
+
+		// 3. grab a grip / body of the selected editable entity?
 		const selId = this.ctx.selectedId();
 		if (selId && doc.isEditable(selId)) {
 			const e = doc.getEntity(selId);
@@ -108,11 +178,15 @@ export class SelectTool implements Tool {
 						pairIndex: best.pairIndex,
 						gripOrigin: { ...best.point },
 						cursorStart: world,
+						basePoint: { ...best.point },
 					};
 					return true;
 				}
 				if (this.ctx.pick(world) === selId) {
-					this.drag = { kind: "whole", id: selId, gripOrigin: world, cursorStart: world };
+					// Grab the body: base the move on the entity's nearest characteristic
+					// point so it snaps feature-to-feature, else free-drag from cursor.
+					const base = nearestGrip(e, world, this.tol()) ?? world;
+					this.drag = { kind: "whole", id: selId, gripOrigin: world, cursorStart: world, basePoint: base };
 					return true;
 				}
 			}
@@ -138,14 +212,19 @@ export class SelectTool implements Tool {
 			const e = this.ctx.doc()?.getEntity(this.drag.id);
 			if (e) prims.push(...outlineWithVertex(e, this.drag.pairIndex!, p));
 			prims.push({ kind: "marker", at: p, style: "square", color: this.ctx.accent, sizePx: 6 });
-		} else if (this.drag.kind === "whole") {
-			const dx = world.x - this.drag.cursorStart.x;
-			const dy = world.y - this.drag.cursorStart.y;
-			const e = this.ctx.doc()?.getEntity(this.drag.id);
-			if (e) prims.push(...outlineTranslated(e, dx, dy));
+		} else if (this.drag.kind === "whole" || this.drag.kind === "group") {
+			const { dx, dy, target } = this.moveDelta(world, this.drag.basePoint);
+			const doc = this.ctx.doc();
+			const ids = this.drag.ids ?? [this.drag.id];
+			for (const id of ids) {
+				const e = doc?.getEntity(id);
+				if (e) prims.push(...outlineTranslated(e, dx, dy));
+			}
+			prims.push({ kind: "marker", at: target, style: "square", color: this.ctx.accent, sizePx: 6 });
 		} else {
-			const at = world;
-			prims.push({ kind: "marker", at, style: "dot", color: this.ctx.accent, sizePx: 6 });
+			const { p, prim } = snapMarker(this.ctx, world);
+			prims.push({ kind: "marker", at: p, style: "dot", color: this.ctx.accent, sizePx: 6 });
+			if (prim) prims.push(prim);
 		}
 		this.ctx.setOverlay(prims);
 	}
@@ -159,13 +238,16 @@ export class SelectTool implements Tool {
 			const dx = p.x - d.gripOrigin.x;
 			const dy = p.y - d.gripOrigin.y;
 			if (dx || dy) this.ctx.execute(new MoveVertexCommand(d.id, d.pairIndex!, dx, dy));
-		} else if (d.kind === "whole") {
-			const dx = world.x - d.cursorStart.x;
-			const dy = world.y - d.cursorStart.y;
-			if (dx || dy) this.ctx.execute(new MoveCommand(d.id, dx, dy));
+		} else if (d.kind === "whole" || d.kind === "group") {
+			const { dx, dy } = this.moveDelta(world, d.basePoint);
+			if (dx || dy) {
+				const ids = d.ids ?? [d.id];
+				for (const id of ids) this.ctx.execute(new MoveCommand(id, dx, dy));
+			}
 		} else {
-			const attach = this.ctx.pick(world);
-			this.ctx.moveAnnotationTo(d.id, world, attach);
+			const { p } = snapMarker(this.ctx, world);
+			const attach = this.ctx.pick(p);
+			this.ctx.moveAnnotationTo(d.id, p, attach);
 		}
 		this.showGrips();
 	}
@@ -174,6 +256,12 @@ export class SelectTool implements Tool {
 		const doc = this.ctx.doc();
 		const selId = this.ctx.selectedId();
 		if (!doc || !selId || !doc.isEditable(selId)) {
+			this.ctx.setOverlay([]);
+			return;
+		}
+		// Grips only make sense for a single selection; a multi-selection just
+		// shows nothing and moves as a group.
+		if (this.ctx.selectedIds().length > 1) {
 			this.ctx.setOverlay([]);
 			return;
 		}
@@ -195,8 +283,22 @@ export class SelectTool implements Tool {
 	}
 
 	hint(): string {
-		return "Click to select · drag a grip/point or body to move · drag empty space to pan";
+		return "Click to select · Ctrl/Cmd+click to add · drag a grip or body to move (snaps) · drag empty space to pan";
 	}
+}
+
+/** The nearest characteristic point of an entity to a world point, within tol. */
+function nearestGrip(e: RenderEntity, world: Point2, tol: number): Point2 | null {
+	let best: Point2 | null = null;
+	let bestD = tol;
+	for (const g of gripsOf(e)) {
+		const d = dist(g.point, world);
+		if (d <= bestD) {
+			bestD = d;
+			best = g.point;
+		}
+	}
+	return best;
 }
 
 function outlinePoints(e: RenderEntity): Point2[] | null {
@@ -251,7 +353,7 @@ export class MeasureDistanceTool implements Tool {
 			if (this.pts.length === 2) {
 				const [a, b] = this.pts;
 				const dx = b.x - a.x, dy = b.y - a.y;
-				this.ctx.reportMeasurement({ kind: "distance", length: Math.hypot(dx, dy), dx, dy, angleDeg: norm360((Math.atan2(dy, dx) * 180) / Math.PI) });
+				this.ctx.reportMeasurement({ kind: "distance", length: Math.hypot(dx, dy), dx, dy, angleDeg: norm360((Math.atan2(dy, dx) * 180) / Math.PI) }, [a, b]);
 				// keep the measured segment on screen (and available to "save as annotation")
 				this.ctx.setOverlay([
 					{ kind: "line", pts: [a, b], color: this.ctx.accent, dashed: true },
@@ -305,7 +407,7 @@ export class MeasureRadiusTool implements Tool {
 		const e = id ? this.ctx.doc()?.getEntity(id) : undefined;
 		if (e && (e.type === "CIRCLE" || e.type === "ARC")) {
 			const r = e.radius;
-			this.ctx.reportMeasurement({ kind: "radius", radius: r, diameter: r * 2, circumference: 2 * Math.PI * r });
+			this.ctx.reportMeasurement({ kind: "radius", radius: r, diameter: r * 2, circumference: 2 * Math.PI * r }, [e.center, { x: e.center.x + r, y: e.center.y }]);
 			this.ctx.setOverlay([
 				{ kind: "circle", center: e.center, radius: r, color: this.ctx.accent, dashed: true },
 				{ kind: "line", pts: [e.center, { x: e.center.x + r, y: e.center.y }], color: this.ctx.accent },
@@ -340,7 +442,7 @@ export class MeasureAngleTool implements Tool {
 				const a2 = Math.atan2(b.y - v.y, b.x - v.x);
 				let deg = norm360(((a2 - a1) * 180) / Math.PI);
 				if (deg > 180) deg = 360 - deg;
-				this.ctx.reportMeasurement({ kind: "angle", angleDeg: deg });
+				this.ctx.reportMeasurement({ kind: "angle", angleDeg: deg }, [a, v, b]);
 				this.ctx.setOverlay([
 					{ kind: "line", pts: [a, v, b], color: this.ctx.accent },
 					{ kind: "label", at: v, text: `${deg.toFixed(2)}°`, color: this.ctx.accent },
@@ -465,6 +567,142 @@ export class DrawCircleTool implements Tool {
 	}
 	hint(): string {
 		return "Click centre, then a point on the circle · Esc to cancel";
+	}
+}
+
+/**
+ * Draw an arc by centre → start point (sets radius + start angle) → end point
+ * (sets end angle). The sweep goes counter-clockwise from start to end, matching
+ * DXF arc convention.
+ */
+export class DrawArcTool implements Tool {
+	readonly id: ToolId = "draw-arc";
+	readonly panWithLeftDrag = false;
+	private center: Point2 | null = null;
+	private radius = 0;
+	private startAngle = 0;
+	constructor(private ctx: ToolContext) {}
+	deactivate(): void {
+		this.reset();
+	}
+	pointer(phase: string, world: Point2): void {
+		const { p, prim } = snapMarker(this.ctx, world);
+		if (phase === "down") {
+			if (!this.center) {
+				this.center = p;
+			} else if (this.radius === 0) {
+				this.radius = dist(this.center, p);
+				this.startAngle = angleDeg(this.center, p);
+			} else {
+				const endAngle = angleDeg(this.center, p);
+				const spec: NewEntitySpec = { type: "ARC", layer: this.ctx.activeLayer(), center: this.center, radius: this.radius, startAngle: this.startAngle, endAngle };
+				const c = this.ctx.activeColor();
+				if (c !== null) spec.colorNumber = c;
+				this.ctx.execute(new AddEntityCommand(spec));
+				this.reset();
+				return;
+			}
+		}
+		const prims: OverlayPrim[] = [];
+		if (this.center && this.radius === 0) {
+			const r = dist(this.center, p);
+			prims.push({ kind: "circle", center: this.center, radius: r, color: this.ctx.accent, dashed: true });
+			prims.push({ kind: "line", pts: [this.center, p], color: this.ctx.accent });
+			prims.push({ kind: "label", at: p, text: `R ${r.toFixed(3)}`, color: this.ctx.accent });
+		} else if (this.center) {
+			const endAngle = angleDeg(this.center, p);
+			prims.push(...arcOutline(this.center, this.radius, this.startAngle, endAngle, this.ctx.accent));
+			prims.push({ kind: "line", pts: [this.center, { x: this.center.x + this.radius * Math.cos((endAngle * Math.PI) / 180), y: this.center.y + this.radius * Math.sin((endAngle * Math.PI) / 180) }], color: this.ctx.accent, dashed: true });
+			const sweep = norm360(endAngle - this.startAngle);
+			prims.push({ kind: "label", at: p, text: `${sweep.toFixed(1)}°`, color: this.ctx.accent });
+		}
+		if (prim) prims.push(prim);
+		this.ctx.setOverlay(prims);
+	}
+	key(ev: KeyboardEvent): boolean {
+		if (ev.key === "Escape") {
+			this.reset();
+			return true;
+		}
+		return false;
+	}
+	private reset(): void {
+		this.center = null;
+		this.radius = 0;
+		this.startAngle = 0;
+		this.ctx.setOverlay([]);
+	}
+	hint(): string {
+		return "Click centre, a start point, then an end point (CCW) · Esc to cancel";
+	}
+}
+
+/**
+ * Rotate the current selection: click a pivot, then move/click to turn. The angle
+ * is measured from the pivot→first-move direction so you can grab and spin.
+ */
+export class RotateTool implements Tool {
+	readonly id: ToolId = "rotate";
+	readonly panWithLeftDrag = false;
+	private pivot: Point2 | null = null;
+	private refAngle: number | null = null;
+	constructor(private ctx: ToolContext) {}
+	deactivate(): void {
+		this.reset();
+	}
+	pointer(phase: string, world: Point2): void {
+		const { p, prim } = snapMarker(this.ctx, world);
+		if (phase === "down") {
+			if (!this.pivot) {
+				this.pivot = p;
+				this.refAngle = null;
+				this.ctx.setOverlay([{ kind: "marker", at: p, style: "circle", color: this.ctx.accent, sizePx: 7 }]);
+				return;
+			}
+			// second click commits the rotation
+			const deg = this.currentAngle(p);
+			const ids = this.ctx.selectedIds().filter((id) => this.ctx.doc()?.isEditable(id));
+			if (ids.length && Math.abs(deg) > 1e-6) this.ctx.execute(new RotateCommand(ids, this.pivot.x, this.pivot.y, deg));
+			this.reset();
+			return;
+		}
+		if (phase === "move" && this.pivot) {
+			const deg = this.currentAngle(p);
+			const prims: OverlayPrim[] = [
+				{ kind: "marker", at: this.pivot, style: "circle", color: this.ctx.accent, sizePx: 7 },
+				{ kind: "line", pts: [this.pivot, p], color: this.ctx.accent, dashed: true },
+				{ kind: "label", at: p, text: `${deg.toFixed(1)}°`, color: this.ctx.accent },
+			];
+			const doc = this.ctx.doc();
+			for (const id of this.ctx.selectedIds()) {
+				const e = doc?.getEntity(id);
+				if (e) prims.push(...outlineRotated(e, this.pivot, deg, this.ctx.accent));
+			}
+			this.ctx.setOverlay(prims);
+			return;
+		}
+		this.ctx.setOverlay(this.pivot ? [{ kind: "marker", at: this.pivot, style: "circle", color: this.ctx.accent, sizePx: 7 }] : prim ? [prim] : []);
+	}
+	private currentAngle(p: Point2): number {
+		if (!this.pivot) return 0;
+		const a = angleDeg(this.pivot, p);
+		if (this.refAngle === null) this.refAngle = a;
+		return norm180(a - this.refAngle);
+	}
+	key(ev: KeyboardEvent): boolean {
+		if (ev.key === "Escape") {
+			this.reset();
+			return true;
+		}
+		return false;
+	}
+	private reset(): void {
+		this.pivot = null;
+		this.refAngle = null;
+		this.ctx.setOverlay([]);
+	}
+	hint(): string {
+		return "Select entities first · click a pivot, then click to set the rotation angle · Esc to cancel";
 	}
 }
 
@@ -595,8 +833,10 @@ export function createTools(ctx: ToolContext): Record<ToolId, Tool> {
 		"measure-angle": new MeasureAngleTool(ctx),
 		"draw-line": new DrawLineTool(ctx),
 		"draw-circle": new DrawCircleTool(ctx),
+		"draw-arc": new DrawArcTool(ctx),
 		"draw-polyline": new DrawPolylineTool(ctx),
 		"draw-text": new TextTool(ctx),
+		"rotate": new RotateTool(ctx),
 		"annotate": new AnnotateTool(ctx),
 	};
 }

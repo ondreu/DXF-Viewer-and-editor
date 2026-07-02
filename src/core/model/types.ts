@@ -114,8 +114,18 @@ export type RenderEntity =
 
 export interface LayerInfo {
 	name: string;
+	/** resolved RGB (0xRRGGBB) for rendering BYLAYER entities and the UI swatch */
 	color: number;
+	/** ACI colour index (abs of group 62); used when editing/serializing the layer */
+	colorIndex?: number;
+	/** false = off (group 62 negative) */
 	visible: boolean;
+	/** true = frozen (group 70 bit 1); frozen layers are hidden and not editable */
+	frozen?: boolean;
+	/** linetype name (group 6), e.g. "CONTINUOUS" */
+	lineType?: string;
+	/** lineweight in 1/100 mm (group 370); -3 = default */
+	lineWeight?: number;
 }
 
 /** Result shipped from the parse worker back to the main thread. */
@@ -126,6 +136,10 @@ export interface ParseResult {
 	/** handle -> raw tag range within `tags` */
 	ranges: Record<string, TagRange>;
 	layers: LayerInfo[];
+	/** layer name -> raw tag range within `tags` (for editing the LAYER table) */
+	layerRanges: Record<string, TagRange>;
+	/** index of the LAYER table's ENDTAB tag (where new layers inject), or -1 */
+	layerTableEnd: number;
 	/** true when every entity carried a handle (i.e. editing is safe) */
 	fullyAddressable: boolean;
 	/** index of the ENTITIES section's ENDSEC tag (where new entities inject), or -1 */
@@ -138,5 +152,6 @@ export interface ParseResult {
 export type NewEntitySpec =
 	| { type: "LINE"; layer: string; colorNumber?: number; start: Point2; end: Point2 }
 	| { type: "CIRCLE"; layer: string; colorNumber?: number; center: Point2; radius: number }
+	| { type: "ARC"; layer: string; colorNumber?: number; center: Point2; radius: number; startAngle: number; endAngle: number }
 	| { type: "LWPOLYLINE"; layer: string; colorNumber?: number; vertices: Point2[]; closed: boolean }
-	| { type: "TEXT"; layer: string; colorNumber?: number; position: Point2; height: number; text: string };
+	| { type: "TEXT"; layer: string; colorNumber?: number; position: Point2; height: number; text: string; rotation?: number };

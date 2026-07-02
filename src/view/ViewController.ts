@@ -6,10 +6,16 @@ import {
 	DeleteCommand,
 	ChangeLayerCommand,
 	ChangeColorCommand,
+	SetPropsCommand,
+	SetAnchorCommand,
+	RotateCommand,
+	AddLayerCommand,
+	UpdateLayerCommand,
 	type Command,
 } from "../core/command/commands";
+import type { PropPatch, LayerPatch } from "../core/model/DxfDocument";
 import { EventEmitter } from "../core/events/EventEmitter";
-import type { ParseResult, RenderEntity, LayerInfo } from "../core/model/types";
+import type { ParseResult, RenderEntity, LayerInfo, Point2 } from "../core/model/types";
 import type { RenderTheme } from "../render/theme";
 import type { Overlay } from "../render/overlay";
 import { ToolManager } from "../interaction/ToolManager";
@@ -23,6 +29,8 @@ const SNAP_PIXELS = 12;
 
 export interface ControllerState {
 	selected: RenderEntity | null;
+	/** number of currently selected entities (multi-select) */
+	selectionCount: number;
 	editable: boolean;
 	canUndo: boolean;
 	canRedo: boolean;
@@ -59,7 +67,8 @@ export class ViewController {
 	private doc: DxfDocument | null = null;
 	private stack: CommandStack | null = null;
 	private tools: ToolManager;
-	private selectedId: string | null = null;
+	private selection = new Set<string>();
+	private lastMeasurePoints: Point2[] = [];
 
 	private accent: number;
 	private snapSettings: SnapSettings = { ...DEFAULT_SNAP };
@@ -74,11 +83,6 @@ export class ViewController {
 		this.renderer = new DxfRenderer(container, opts.theme);
 		this.accent = (opts.theme.accent as number) ?? 0x7f6df2;
 		this.promptText = opts.promptText;
-
-		this.renderer.events.on("select", ({ id }) => {
-			this.selectedId = id;
-			this.emit();
-		});
 
 		this.tools = new ToolManager(this.buildToolContext(), this.renderer, () => this.emit());
 		this.annotations.events.on("change", () => {
@@ -98,16 +102,19 @@ export class ViewController {
 				this.syncAttachedAnnotations();
 				this.emit();
 			},
-			select: (id) => this.renderer.select(id),
+			select: (id) => this.setSelectionIds(id ? [id] : []),
+			toggleSelection: (id) => this.toggleSelection(id),
 			selectedId: () => this.selectedId,
+			selectedIds: () => [...this.selection],
 			annotationAt: (world) => this.annotationAt(world),
 			moveAnnotationTo: (id, at, attachTo) => this.moveAnnotationTo(id, at, attachTo),
 			setOverlay: (prims) => {
 				this.toolOverlay = prims;
 				this.composeOverlay();
 			},
-			reportMeasurement: (m) => {
+			reportMeasurement: (m, points) => {
 				this.measurement = m;
+				if (points) this.lastMeasurePoints = points;
 				this.emit();
 			},
 			addAnnotation: (a) => this.annotations.add(a),
@@ -175,14 +182,39 @@ export class ViewController {
 	private snapAt(world: { x: number; y: number }): SnapResult | null {
 		if (!this.doc) return null;
 		const tol = this.renderer.pixelsToWorld(SNAP_PIXELS);
-		return computeSnap(world, this.doc.entities, this.snapSettings, tol, (id) => !!this.doc?.isDeleted(id));
+		return computeSnap(world, this.doc.entities, this.snapSettings, tol, (id) => !!this.doc?.isHidden(id));
+	}
+
+	/** Primary (last) entity of the current selection. */
+	private get selectedId(): string | null {
+		let last: string | null = null;
+		for (const id of this.selection) last = id;
+		return last;
+	}
+
+	private setSelectionIds(ids: string[]): void {
+		this.selection = new Set(ids.filter((id) => this.doc?.getEntity(id) && !this.doc.isHidden(id)));
+		this.renderer.setSelection([...this.selection]);
+		this.emit();
+	}
+
+	private toggleSelection(id: string | null): void {
+		if (!id) return;
+		if (this.selection.has(id)) this.selection.delete(id);
+		else if (this.doc?.getEntity(id) && !this.doc.isHidden(id)) this.selection.add(id);
+		this.renderer.setSelection([...this.selection]);
+		this.emit();
+	}
+
+	clearSelection(): void {
+		this.setSelectionIds([]);
 	}
 
 	load(result: ParseResult, annotationJSON: string | null): void {
 		this.doc = DxfDocument.fromResult(result);
 		this.stack = new CommandStack(this.doc);
 		this.stack.events.on("change", () => this.emit());
-		this.selectedId = null;
+		this.selection = new Set();
 		this.measurement = null;
 		this.activeLayerName = result.layers[0]?.name ?? "0";
 		this.annotations.loadJSON(annotationJSON);
@@ -204,6 +236,7 @@ export class ViewController {
 		const selected = this.selectedId ? this.doc?.getEntity(this.selectedId) ?? null : null;
 		return {
 			selected,
+			selectionCount: this.selection.size,
 			editable: !!(this.selectedId && this.doc?.isEditable(this.selectedId)),
 			canUndo: this.stack?.canUndo ?? false,
 			canRedo: this.stack?.canRedo ?? false,
@@ -257,13 +290,12 @@ export class ViewController {
 
 	saveMeasurementAsAnnotation(): void {
 		if (!this.measurement) return;
-		// Reconstruct anchor points from the current tool overlay lines, if any.
-		const line = this.toolOverlay.find((p) => p.kind === "line");
-		const points = line && line.kind === "line" ? line.pts : [];
+		// Points captured when the measurement completed (robust across mouse moves).
+		const points = this.lastMeasurePoints.length ? this.lastMeasurePoints.map((p) => ({ ...p })) : [{ x: 0, y: 0 }];
 		this.annotations.add({
 			id: AnnotationStore.newId(),
 			kind: "measure",
-			points: points.length ? points : [{ x: 0, y: 0 }],
+			points,
 			data: this.measurement,
 		});
 	}
@@ -280,29 +312,111 @@ export class ViewController {
 		this.emit();
 	}
 
+	/** Editable entities in the current selection (frozen/locked ones excluded). */
+	private editableSelection(): string[] {
+		return [...this.selection].filter((id) => this.doc?.isEditable(id));
+	}
+
 	moveSelected(dx: number, dy: number): void {
-		const id = this.selectedId;
-		if (id && this.doc?.isEditable(id)) this.execEdit(new MoveCommand(id, dx, dy), id);
+		const ids = this.editableSelection();
+		if (!ids.length || !this.stack) return;
+		for (const id of ids) {
+			this.stack.execute(new MoveCommand(id, dx, dy));
+			this.renderer.refreshEntity(id);
+		}
+		this.syncAttachedAnnotations();
+		this.emit();
 	}
 
 	deleteSelected(): void {
-		const id = this.selectedId;
-		if (!id || !this.doc?.isEditable(id) || !this.stack) return;
-		this.stack.execute(new DeleteCommand(id));
-		this.renderer.refreshEntity(id);
-		this.renderer.select(null, false);
-		this.selectedId = null;
+		const ids = this.editableSelection();
+		if (!ids.length || !this.stack) return;
+		for (const id of ids) {
+			this.stack.execute(new DeleteCommand(id));
+			this.renderer.refreshEntity(id);
+		}
+		this.selection = new Set();
+		this.renderer.setSelection([]);
 		this.emit();
 	}
 
 	changeLayer(layer: string): void {
-		const id = this.selectedId;
-		if (id && this.doc?.isEditable(id)) this.execEdit(new ChangeLayerCommand(id, layer), id);
+		const ids = this.editableSelection();
+		if (!ids.length || !this.stack) return;
+		for (const id of ids) {
+			this.stack.execute(new ChangeLayerCommand(id, layer));
+			this.renderer.refreshEntity(id);
+		}
+		this.emit();
 	}
 
 	changeColor(aci: number | null): void {
+		const ids = this.editableSelection();
+		if (!ids.length || !this.stack) return;
+		for (const id of ids) {
+			this.stack.execute(new ChangeColorCommand(id, aci));
+			this.renderer.refreshEntity(id);
+		}
+		this.emit();
+	}
+
+	/** Set precise scalar properties on the primary selected entity. */
+	setSelectedProps(patch: PropPatch): void {
 		const id = this.selectedId;
-		if (id && this.doc?.isEditable(id)) this.execEdit(new ChangeColorCommand(id, aci), id);
+		if (id && this.doc?.isEditable(id)) this.execEdit(new SetPropsCommand(id, patch), id);
+	}
+
+	/** Place the primary selected entity's anchor at an exact coordinate. */
+	setSelectedAnchor(x: number, y: number): void {
+		const id = this.selectedId;
+		if (id && this.doc?.isEditable(id)) this.execEdit(new SetAnchorCommand(id, x, y), id);
+	}
+
+	/** Rotate the whole selection about a pivot (defaults to selection centroid). */
+	rotateSelected(deg: number, pivot?: Point2): void {
+		const ids = this.editableSelection();
+		if (!ids.length || !this.stack) return;
+		const c = pivot ?? this.selectionCentroid(ids);
+		this.stack.execute(new RotateCommand(ids, c.x, c.y, deg));
+		this.renderer.rebuild();
+		this.syncAttachedAnnotations();
+		this.emit();
+	}
+
+	private selectionCentroid(ids: string[]): Point2 {
+		let x = 0, y = 0, n = 0;
+		for (const id of ids) {
+			const a = this.doc?.anchorOf(id);
+			if (a) { x += a.x; y += a.y; n++; }
+		}
+		return n ? { x: x / n, y: y / n } : { x: 0, y: 0 };
+	}
+
+	// -- layer table actions --------------------------------------------------
+
+	addLayer(name: string, patch: LayerPatch = {}): void {
+		if (!this.stack || !name.trim()) return;
+		this.stack.execute(new AddLayerCommand(name.trim(), patch));
+		this.emit();
+	}
+
+	updateLayer(name: string, patch: LayerPatch): void {
+		if (!this.stack) return;
+		this.stack.execute(new UpdateLayerCommand(name, patch));
+		// Colour/visibility changes affect what/how entities draw.
+		this.renderer.rebuild();
+		this.reconcileSelection();
+		this.emit();
+	}
+
+	toggleLayerVisible(name: string): void {
+		const l = this.doc?.layers.find((x) => x.name === name);
+		if (l) this.updateLayer(name, { visible: l.visible === false });
+	}
+
+	toggleLayerFrozen(name: string): void {
+		const l = this.doc?.layers.find((x) => x.name === name);
+		if (l) this.updateLayer(name, { frozen: !l.frozen });
 	}
 
 	undo(): void {
@@ -320,10 +434,15 @@ export class ViewController {
 	}
 
 	private reconcileSelection(): void {
-		if (this.selectedId && (this.doc?.isDeleted(this.selectedId) || !this.doc?.getEntity(this.selectedId))) {
-			this.selectedId = null;
-			this.renderer.select(null, false);
+		// Drop any selected ids that vanished (undone add) or became hidden.
+		let changed = false;
+		for (const id of [...this.selection]) {
+			if (!this.doc?.getEntity(id) || this.doc.isHidden(id)) {
+				this.selection.delete(id);
+				changed = true;
+			}
 		}
+		if (changed) this.renderer.setSelection([...this.selection]);
 		this.emit();
 	}
 

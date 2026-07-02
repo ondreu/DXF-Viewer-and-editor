@@ -1,5 +1,5 @@
-import type { DxfDocument } from "../model/DxfDocument";
-import type { NewEntitySpec } from "../model/types";
+import type { DxfDocument, PropPatch, LayerPatch } from "../model/DxfDocument";
+import type { NewEntitySpec, Point2 } from "../model/types";
 
 /**
  * A reversible edit. Commands are the *only* way the document is mutated, so
@@ -93,5 +93,84 @@ export class ChangeColorCommand implements Command {
 	}
 	undo(doc: DxfDocument): void {
 		doc.setColor(this.id, this.prev);
+	}
+}
+
+/** Set precise scalar properties (radius, text height/rotation/content, arc angles). */
+export class SetPropsCommand implements Command {
+	readonly label = "Edit properties";
+	private prev: PropPatch = {};
+	constructor(private readonly id: string, private readonly patch: PropPatch) {}
+	do(doc: DxfDocument): void {
+		const all = doc.propsOf(this.id);
+		this.prev = {};
+		for (const k of Object.keys(this.patch) as (keyof PropPatch)[]) {
+			// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			(this.prev as any)[k] = all[k];
+		}
+		doc.setProps(this.id, this.patch);
+	}
+	undo(doc: DxfDocument): void {
+		doc.setProps(this.id, this.prev);
+	}
+}
+
+/** Move an entity so its anchor lands exactly at a target point (precise placement). */
+export class SetAnchorCommand implements Command {
+	readonly label = "Set position";
+	private prev: Point2 | null = null;
+	constructor(private readonly id: string, private readonly x: number, private readonly y: number) {}
+	do(doc: DxfDocument): void {
+		this.prev = doc.anchorOf(this.id);
+		doc.setAnchor(this.id, this.x, this.y);
+	}
+	undo(doc: DxfDocument): void {
+		if (this.prev) doc.setAnchor(this.id, this.prev.x, this.prev.y);
+	}
+}
+
+/** Rotate one or more entities about a shared pivot. */
+export class RotateCommand implements Command {
+	readonly label = "Rotate";
+	constructor(
+		private readonly ids: string[],
+		private readonly cx: number,
+		private readonly cy: number,
+		private readonly deg: number
+	) {}
+	do(doc: DxfDocument): void {
+		for (const id of this.ids) doc.rotate(id, this.cx, this.cy, this.deg);
+	}
+	undo(doc: DxfDocument): void {
+		for (const id of this.ids) doc.rotate(id, this.cx, this.cy, -this.deg);
+	}
+}
+
+export class AddLayerCommand implements Command {
+	readonly label = "Add layer";
+	constructor(private readonly name: string, private readonly patch: LayerPatch = {}) {}
+	do(doc: DxfDocument): void {
+		doc.addLayer(this.name, this.patch);
+	}
+	undo(doc: DxfDocument): void {
+		doc.removeAddedLayer(this.name);
+	}
+}
+
+export class UpdateLayerCommand implements Command {
+	readonly label = "Edit layer";
+	private prev: LayerPatch = {};
+	constructor(private readonly name: string, private readonly patch: LayerPatch) {}
+	do(doc: DxfDocument): void {
+		const all = doc.layerState(this.name);
+		this.prev = {};
+		for (const k of Object.keys(this.patch) as (keyof LayerPatch)[]) {
+			// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			(this.prev as any)[k] = all[k];
+		}
+		doc.updateLayer(this.name, this.patch);
+	}
+	undo(doc: DxfDocument): void {
+		doc.updateLayer(this.name, this.prev);
 	}
 }

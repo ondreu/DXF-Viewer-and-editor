@@ -7,6 +7,7 @@ export type SnapType =
 	| "quadrant"
 	| "intersection"
 	| "node"
+	| "extension"
 	| "grid"
 	| "nearest";
 
@@ -23,6 +24,8 @@ export interface SnapSettings {
 	center: boolean;
 	quadrant: boolean;
 	intersection: boolean;
+	/** snap to the infinite-line extension of a segment beyond its endpoints */
+	extension: boolean;
 	grid: boolean;
 	gridSpacing: number;
 }
@@ -34,6 +37,7 @@ export const DEFAULT_SNAP: SnapSettings = {
 	center: true,
 	quadrant: true,
 	intersection: true,
+	extension: true,
 	grid: false,
 	gridSpacing: 1,
 };
@@ -46,9 +50,13 @@ const PRIORITY: Record<SnapType, number> = {
 	midpoint: 3,
 	quadrant: 4,
 	node: 5,
-	grid: 6,
-	nearest: 7,
+	extension: 6,
+	grid: 7,
+	nearest: 8,
 };
+
+/** How far past a segment's end (in tol multiples) an extension snap still fires. */
+const EXTENSION_REACH = 40;
 
 function dist(a: Point2, b: Point2): number {
 	return Math.hypot(a.x - b.x, a.y - b.y);
@@ -106,6 +114,16 @@ function quadrantsOf(e: RenderEntity): Point2[] {
 		{ x: c.x - r, y: c.y },
 		{ x: c.x, y: c.y - r },
 	];
+}
+
+/** Project a point onto the infinite line through a,b; returns foot, param t, length. */
+function projectOnLine(p: Point2, a: Point2, b: Point2): { point: Point2; t: number; len: number } | null {
+	const dx = b.x - a.x;
+	const dy = b.y - a.y;
+	const len2 = dx * dx + dy * dy;
+	if (len2 < 1e-18) return null;
+	const t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2;
+	return { point: { x: a.x + t * dx, y: a.y + t * dy }, t, len: Math.sqrt(len2) };
 }
 
 /** Infinite-line intersection of two segments' host lines (used for OSNAP). */
@@ -169,7 +187,20 @@ export function computeSnap(
 			if (c) consider(c, "center", e.id);
 		}
 		if (settings.quadrant) for (const p of quadrantsOf(e)) consider(p, "quadrant", e.id);
-		if (settings.intersection && segmentsOf(e).length) near.push(e);
+		if ((settings.intersection || settings.extension) && segmentsOf(e).length) near.push(e);
+
+		// Extension: project the cursor onto each segment's infinite line; snap to
+		// the foot when it lies *beyond* the segment (a construction extension).
+		if (settings.extension) {
+			for (const [a, b] of segmentsOf(e)) {
+				const foot = projectOnLine(cursor, a, b);
+				if (!foot) continue;
+				if (foot.t >= -1e-9 && foot.t <= 1 + 1e-9) continue; // on the segment (nearest, not extension)
+				const along = foot.t < 0 ? -foot.t : foot.t - 1;
+				if (along * foot.len > EXTENSION_REACH * tol) continue;
+				consider(foot.point, "extension", e.id);
+			}
+		}
 	}
 
 	if (settings.intersection) {

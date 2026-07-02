@@ -63,6 +63,7 @@ export class DxfRenderer {
 	private centerY = 0;
 	private unitsPerPixel = 1;
 	private selectedId: string | null = null;
+	private selection = new Set<string>();
 
 	private gridVisible = true;
 	private overlayPrims: Overlay = [];
@@ -126,7 +127,7 @@ export class DxfRenderer {
 
 	pickAt(world: Point2): string | null {
 		if (!this.doc) return null;
-		return pickEntity(world, this.doc.entities, PICK_PIXELS * this.unitsPerPixel, (i) => !!this.doc?.isDeleted(i));
+		return pickEntity(world, this.doc.entities, PICK_PIXELS * this.unitsPerPixel, (i) => !!this.doc?.isHidden(i));
 	}
 
 	setOverlay(prims: Overlay): void {
@@ -159,7 +160,7 @@ export class DxfRenderer {
 		this.clearObjects();
 		if (!this.doc) return;
 		for (const e of this.doc.entities) {
-			if (this.doc.isDeleted(e.id)) continue;
+			if (this.doc.isHidden(e.id)) continue;
 			const obj = this.buildObject(e);
 			if (obj) {
 				this.objects.set(e.id, obj);
@@ -178,7 +179,7 @@ export class DxfRenderer {
 			disposeObject(old);
 			this.objects.delete(id);
 		}
-		if (!this.doc.isDeleted(id)) {
+		if (!this.doc.isHidden(id)) {
 			const e = this.doc.getEntity(id);
 			if (e) {
 				const obj = this.buildObject(e);
@@ -193,11 +194,19 @@ export class DxfRenderer {
 	}
 
 	select(id: string | null, emit = true): void {
-		if (this.selectedId === id) return;
 		this.selectedId = id;
+		this.selection = id ? new Set([id]) : new Set();
 		this.applySelectionHighlight();
 		this.requestFrame();
 		if (emit) this.events.emit("select", { id });
+	}
+
+	/** Replace the whole selection set (primary = last id), without re-emitting. */
+	setSelection(ids: string[]): void {
+		this.selection = new Set(ids);
+		this.selectedId = ids.length ? ids[ids.length - 1] : null;
+		this.applySelectionHighlight();
+		this.requestFrame();
 	}
 
 	fit(): void {
@@ -314,7 +323,7 @@ export class DxfRenderer {
 
 	private applySelectionHighlight(): void {
 		for (const [id, obj] of this.objects) {
-			const selected = id === this.selectedId;
+			const selected = this.selection.has(id);
 			obj.traverse((child) => {
 				// eslint-disable-next-line @typescript-eslint/no-explicit-any
 				const mat = (child as any).material as LineBasicMaterial | undefined;
@@ -366,10 +375,10 @@ export class DxfRenderer {
 		for (let y = Math.ceil(bottom / step) * step; y <= top && count < maxLines; y += step, count++) {
 			push(isMajor(y) ? majorArr : minor, left, y, right, y);
 		}
-		// Keep the grid barely visible so it never competes with the drawing.
+		// Grid stays subtle but clearly readable against the drawing.
 		const gridColor = new Color(this.theme.grid).getHex();
-		if (minor.length) this.gridGroup.add(this.segments(minor, gridColor, 0.12));
-		if (majorArr.length) this.gridGroup.add(this.segments(majorArr, gridColor, 0.28));
+		if (minor.length) this.gridGroup.add(this.segments(minor, gridColor, 0.32));
+		if (majorArr.length) this.gridGroup.add(this.segments(majorArr, gridColor, 0.6));
 	}
 
 	private segments(arr: number[], color: number, opacity = 1): LineSegments {
@@ -640,7 +649,7 @@ export class DxfRenderer {
 			maxY = Math.max(maxY, p.y);
 		};
 		for (const e of this.doc.entities) {
-			if (this.doc.isDeleted(e.id)) continue;
+			if (this.doc.isHidden(e.id)) continue;
 			switch (e.type) {
 				case "LINE": acc(e.start); acc(e.end); break;
 				case "CIRCLE":
