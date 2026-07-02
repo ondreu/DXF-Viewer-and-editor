@@ -17,9 +17,11 @@
 		[
 			{ id: "draw-line", name: "pencil", label: "Draw line" },
 			{ id: "draw-circle", name: "circle", label: "Draw circle" },
+			{ id: "draw-arc", name: "spline-pointer", label: "Draw arc" },
 			{ id: "draw-polyline", name: "spline", label: "Draw polyline" },
 			{ id: "draw-text", name: "type", label: "Add text" },
 		],
+		[{ id: "rotate", name: "rotate-cw", label: "Rotate selection" }],
 		[{ id: "annotate", name: "sticky-note", label: "Add note (annotation)" }],
 	];
 </script>

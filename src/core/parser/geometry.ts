@@ -23,14 +23,23 @@ const MAX_ARRAY = 400;
 export function buildRenderModel(
 	dxf: IDxf,
 	tags: DxfTag[],
-	ranges: Record<string, TagRange>
+	ranges: Record<string, TagRange>,
+	layerRanges: Record<string, TagRange> = {}
 ): { entities: RenderEntity[]; layers: LayerInfo[] } {
 	const layerMap = dxf.tables?.layer?.layers ?? {};
-	const layers: LayerInfo[] = Object.values(layerMap).map((l) => ({
-		name: l.name,
-		color: l.color ?? DEFAULT_COLOR,
-		visible: l.visible !== false,
-	}));
+	const layers: LayerInfo[] = Object.values(layerMap).map((l) => {
+		const raw = layerRanges[l.name] ? readLayerTags(tags, layerRanges[l.name]) : {};
+		return {
+			name: l.name,
+			color: l.color ?? DEFAULT_COLOR,
+			colorIndex: raw.colorRaw !== undefined ? Math.abs(raw.colorRaw) : undefined,
+			// group 62 negative = layer off; group 70 bit 1 = frozen.
+			visible: raw.colorRaw !== undefined ? raw.colorRaw >= 0 : l.visible !== false,
+			frozen: raw.flags !== undefined ? (raw.flags & 1) !== 0 : false,
+			lineType: raw.lineType,
+			lineWeight: raw.lineWeight,
+		};
+	});
 	const layerColor = (name: string): number =>
 		layerMap[name]?.color ?? DEFAULT_COLOR;
 
@@ -312,6 +321,22 @@ function readExtrusion(tags: DxfTag[], range: TagRange): Vec3 {
 	}
 	if (x === undefined && y === undefined && z === undefined) return WCS_NORMAL;
 	return { x: x ?? 0, y: y ?? 0, z: z ?? 1 };
+}
+
+/** Read the fields we surface/edit from a LAYER table entry's raw tags. */
+function readLayerTags(
+	tags: DxfTag[],
+	range: TagRange
+): { colorRaw?: number; flags?: number; lineType?: string; lineWeight?: number } {
+	const out: { colorRaw?: number; flags?: number; lineType?: string; lineWeight?: number } = {};
+	for (let i = range.start + 1; i < range.end; i++) {
+		const t = tags[i];
+		if (t.code === 62 && out.colorRaw === undefined) out.colorRaw = parseInt(t.value, 10);
+		else if (t.code === 70 && out.flags === undefined) out.flags = parseInt(t.value, 10);
+		else if (t.code === 6 && out.lineType === undefined) out.lineType = t.value;
+		else if (t.code === 370 && out.lineWeight === undefined) out.lineWeight = parseInt(t.value, 10);
+	}
+	return out;
 }
 
 function readLayer(tags: DxfTag[], range: TagRange): string {

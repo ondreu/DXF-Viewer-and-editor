@@ -20,17 +20,28 @@ This is **v1: DXF only**. DWG is intentionally out of scope (see
   middle/right-drag always pans, even while a tool is active.
 - **Adaptive grid** — a background grid with nice-number spacing that adapts to
   zoom; toggle from the top bar.
-- **Snapping** — endpoint, midpoint, centre, quadrant, intersection and grid
-  snaps drive both measuring and drawing.
+- **Snapping** — endpoint, midpoint, centre, quadrant, intersection, **line
+  extension** and grid snaps drive measuring, drawing **and moving** (drag a
+  grip, an entity body, or a note and it snaps to real geometry).
 - **Measure** — distance (with Δx/Δy and angle), radius/diameter/circumference,
-  and three-point angle, shown in a floating readout.
-- **Draw** — line, circle, polyline and text. Drawn geometry becomes **real DXF
-  entities** written back to the file on save.
+  and three-point angle, shown in a floating readout. Measurements can be saved
+  as visible annotations.
+- **Draw** — line, circle, **arc**, polyline and text. Drawn geometry becomes
+  **real DXF entities** written back to the file on save.
+- **Editing** — move, rotate, delete, and change the layer/colour of `LINE`,
+  `CIRCLE`, `ARC`, `LWPOLYLINE` and `TEXT` entities, with undo/redo.
+- **Multi-select** — `Ctrl`/`Cmd`+click to add entities to the selection; move,
+  rotate, delete or recolour them all at once.
+- **Precise properties** — edit exact position (X/Y), radius, arc start/end
+  angles, and text height/rotation/content from the Properties card.
+- **Rotation** — a rotate tool (pick a pivot, spin), plus 90° quick-rotate
+  buttons, working on single entities or a whole multi-selection.
+- **Layer management** — add layers and set their colour, linetype and
+  lineweight; **hide/show** and **freeze/thaw** layers. Edits are written back
+  into the DXF `LAYER` table on save.
 - **Annotations** — drop notes and save measurements as markup stored in a
   **sidecar JSON** (`<drawing>.dxf.annotations.json`); the `.dxf` is never
   touched by annotations.
-- **Light editing** — move, delete, and change the layer/colour of `LINE`,
-  `CIRCLE`, `ARC`, `LWPOLYLINE` and `TEXT` entities, with undo/redo.
 - **Correct geometry** — OCS/extrusion (e.g. mirrored `(0,0,-1)` normals) and
   nested/array block INSERTs are transformed to world coordinates, so holes and
   sub-parts land where AutoCAD puts them.
@@ -44,18 +55,19 @@ This is **v1: DXF only**. DWG is intentionally out of scope (see
 ### Interface
 
 - **Left palette**: select · measure (distance / radius / angle) · draw (line /
-  circle / polyline / text) · note.
-- **Top bar**: fit · grid toggle · undo · redo · layers & draw settings ·
-  annotations · save (a dot marks unsaved changes).
+  circle / arc / polyline / text) · rotate · note.
+- **Top bar**: fit · grid toggle · snap toggle · screenshot · undo · redo ·
+  layers · annotations · save (a dot marks unsaved changes).
 - **Keyboard**: `Esc` cancels the current tool operation, `Enter` finishes a
-  polyline (`C` closes it), arrow keys nudge a selection, `Ctrl/Cmd+S` saves,
-  `Ctrl/Cmd+Z` / `Shift+Ctrl/Cmd+Z` undo/redo.
+  polyline (`C` closes it), arrow keys nudge a selection, `Delete` removes it,
+  `Ctrl/Cmd+S` saves, `Ctrl/Cmd+Z` / `Shift+Ctrl/Cmd+Z` undo/redo. `Ctrl`/`Cmd`
+  +click extends the selection.
 
 ### Supported entities
 
 | Entity | View | Edit |
 |---|---|---|
-| LINE, CIRCLE, ARC, LWPOLYLINE, TEXT | ✅ | ✅ (move / delete / layer / colour) |
+| LINE, CIRCLE, ARC, LWPOLYLINE, TEXT | ✅ | ✅ (move / rotate / delete / layer / colour / dimensions) |
 | POLYLINE, MTEXT, INSERT (flattened blocks) | ✅ | — |
 | Everything else | placeholder marker | preserved on save |
 

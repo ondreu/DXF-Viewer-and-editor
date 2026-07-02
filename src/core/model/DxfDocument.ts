@@ -8,7 +8,7 @@ import type {
 } from "./types";
 import { EDITABLE_TYPES } from "./types";
 import { aciToRgb } from "./aci";
-import { serialize, type EntityEdit } from "../serializer/DxfSerializer";
+import { serialize, type Replacement, type Insertion } from "../serializer/DxfSerializer";
 import { entityToTags } from "../serializer/entityTags";
 import { fmtReal, nextHandle } from "../serializer/format";
 
@@ -21,13 +21,35 @@ interface EditState {
 	pointOffsets?: Map<number, { dx: number; dy: number }>;
 	layer?: string;
 	color: ColorOverride;
+	/** absolute overrides for scalar group codes (40 radius/height, 50/51 angles, 1 text) */
+	codeOverrides?: Map<number, string>;
+}
+
+/** Editable fields exposed by the properties panel / precise-edit commands. */
+export interface PropPatch {
+	radius?: number;
+	height?: number;
+	rotation?: number;
+	text?: string;
+	startAngle?: number;
+	endAngle?: number;
+}
+
+/** Editable fields of a LAYER table entry. */
+export interface LayerPatch {
+	colorIndex?: number;
+	lineType?: string;
+	lineWeight?: number;
+	visible?: boolean;
+	frozen?: boolean;
 }
 
 /**
  * The editable document model over a raw DXF tag stream. Loaded entities patch
  * their original raw tags (verbatim passthrough for anything untouched, §7);
  * newly drawn entities are regenerated from their live render state and injected
- * before the ENTITIES ENDSEC on save (§8 draw tools).
+ * before the ENTITIES ENDSEC on save (§8 draw tools). Layer-table edits patch
+ * the LAYER table the same way.
  */
 export class DxfDocument {
 	readonly entities: RenderEntity[];
@@ -38,6 +60,9 @@ export class DxfDocument {
 	private readonly deleted = new Set<string>();
 	private readonly added = new Set<string>();
 	private readonly layerColor = new Map<string, number>();
+	private readonly layerByName = new Map<string, LayerInfo>();
+	private readonly layerEdits = new Map<string, LayerPatch>();
+	private readonly addedLayers = new Set<string>();
 	private maxHandle: number;
 
 	constructor(
@@ -48,13 +73,18 @@ export class DxfDocument {
 		layers: LayerInfo[],
 		readonly fullyAddressable: boolean,
 		private readonly entitiesEnd: number,
-		maxHandle: number
+		maxHandle: number,
+		private readonly layerRanges: Record<string, TagRange> = {},
+		private readonly layerTableEnd: number = -1
 	) {
 		this.entities = entities;
 		this.layers = layers;
 		this.maxHandle = maxHandle;
 		for (const e of entities) this.byId.set(e.id, e);
-		for (const l of layers) this.layerColor.set(l.name, l.color);
+		for (const l of layers) {
+			this.layerColor.set(l.name, l.color);
+			this.layerByName.set(l.name, l);
+		}
 	}
 
 	static fromResult(r: import("./types").ParseResult): DxfDocument {
@@ -66,7 +96,9 @@ export class DxfDocument {
 			r.layers,
 			r.fullyAddressable,
 			r.entitiesEnd,
-			r.maxHandle
+			r.maxHandle,
+			r.layerRanges,
+			r.layerTableEnd
 		);
 	}
 
@@ -77,6 +109,7 @@ export class DxfDocument {
 	isEditable(id: string): boolean {
 		const e = this.byId.get(id);
 		if (!e || this.deleted.has(id)) return false;
+		if (this.isLayerFrozen(e.layer)) return false;
 		return EDITABLE_TYPES.has(e.type) && (!!this.ranges[id] || this.added.has(id));
 	}
 
@@ -92,8 +125,37 @@ export class DxfDocument {
 		return this.layerColor.get(name) ?? 0x000000;
 	}
 
+	// -- layer visibility -----------------------------------------------------
+
+	isLayerFrozen(name: string): boolean {
+		return this.layerByName.get(name)?.frozen === true;
+	}
+
+	isLayerVisible(name: string): boolean {
+		const l = this.layerByName.get(name);
+		if (!l) return true;
+		return l.visible !== false && l.frozen !== true;
+	}
+
+	/** True when the entity should be drawn/picked/snapped (not deleted, layer on). */
+	isVisible(id: string): boolean {
+		if (this.deleted.has(id)) return false;
+		const e = this.byId.get(id);
+		return !e || this.isLayerVisible(e.layer);
+	}
+
+	/** Combined predicate for hidden entities (deleted OR on an off/frozen layer). */
+	isHidden(id: string): boolean {
+		return !this.isVisible(id);
+	}
+
 	hasUnsavedChanges(): boolean {
-		return this.buildEdits().size > 0 || this.buildAdditions().length > 0;
+		return (
+			this.buildEntityEdits().size > 0 ||
+			this.buildAdditions().length > 0 ||
+			this.layerEdits.size > 0 ||
+			this.addedLayers.size > 0
+		);
 	}
 
 	private state(id: string): EditState {
@@ -128,11 +190,14 @@ export class DxfDocument {
 			case "CIRCLE":
 				e = { id: h, type: "CIRCLE", layer: spec.layer, color, colorNumber: spec.colorNumber, center: { ...spec.center }, radius: spec.radius };
 				break;
+			case "ARC":
+				e = { id: h, type: "ARC", layer: spec.layer, color, colorNumber: spec.colorNumber, center: { ...spec.center }, radius: spec.radius, startAngle: spec.startAngle, endAngle: spec.endAngle };
+				break;
 			case "LWPOLYLINE":
 				e = { id: h, type: "LWPOLYLINE", layer: spec.layer, color, colorNumber: spec.colorNumber, vertices: spec.vertices.map((v) => ({ ...v })), closed: spec.closed };
 				break;
 			case "TEXT":
-				e = { id: h, type: "TEXT", layer: spec.layer, color, colorNumber: spec.colorNumber, position: { ...spec.position }, height: spec.height, rotation: 0, text: spec.text };
+				e = { id: h, type: "TEXT", layer: spec.layer, color, colorNumber: spec.colorNumber, position: { ...spec.position }, height: spec.height, rotation: spec.rotation ?? 0, text: spec.text };
 				break;
 		}
 		this.entities.push(e);
@@ -181,6 +246,93 @@ export class DxfDocument {
 		if (pt) {
 			pt.x += dx;
 			pt.y += dy;
+		}
+	}
+
+	/** Move the entity so its anchor lands exactly at (x, y) — precise placement. */
+	setAnchor(id: string, x: number, y: number): void {
+		const a = this.anchorOf(id);
+		if (!a) return;
+		this.move(id, x - a.x, y - a.y);
+	}
+
+	/** Set scalar properties (radius, text height, angles, text content). */
+	setProps(id: string, patch: PropPatch): void {
+		const e = this.byId.get(id);
+		if (!e) return;
+		const override = (code: number, value: string) => {
+			if (this.added.has(id)) return; // added entities regenerate from render state
+			const s = this.state(id);
+			if (!s.codeOverrides) s.codeOverrides = new Map();
+			s.codeOverrides.set(code, value);
+		};
+		if (patch.radius !== undefined && (e.type === "CIRCLE" || e.type === "ARC")) {
+			e.radius = patch.radius;
+			override(40, fmtReal(patch.radius));
+		}
+		if (patch.height !== undefined && (e.type === "TEXT" || e.type === "MTEXT")) {
+			e.height = patch.height;
+			override(40, fmtReal(patch.height));
+		}
+		if (patch.rotation !== undefined && (e.type === "TEXT" || e.type === "MTEXT")) {
+			e.rotation = patch.rotation;
+			override(50, fmtReal(patch.rotation));
+		}
+		if (patch.text !== undefined && (e.type === "TEXT" || e.type === "MTEXT")) {
+			e.text = patch.text;
+			override(1, patch.text);
+		}
+		if (patch.startAngle !== undefined && e.type === "ARC") {
+			e.startAngle = patch.startAngle;
+			override(50, fmtReal(patch.startAngle));
+		}
+		if (patch.endAngle !== undefined && e.type === "ARC") {
+			e.endAngle = patch.endAngle;
+			override(51, fmtReal(patch.endAngle));
+		}
+	}
+
+	/** Read the current value of a scalar prop (for building undo patches). */
+	propsOf(id: string): PropPatch {
+		const e = this.byId.get(id);
+		if (!e) return {};
+		switch (e.type) {
+			case "CIRCLE":
+				return { radius: e.radius };
+			case "ARC":
+				return { radius: e.radius, startAngle: e.startAngle, endAngle: e.endAngle };
+			case "TEXT":
+			case "MTEXT":
+				return { height: e.height, rotation: e.rotation, text: e.text };
+			default:
+				return {};
+		}
+	}
+
+	/** Rotate an entity `deg` degrees CCW about (cx, cy). */
+	rotate(id: string, cx: number, cy: number, deg: number): void {
+		const e = this.byId.get(id);
+		if (!e) return;
+		const rad = (deg * Math.PI) / 180;
+		const cos = Math.cos(rad);
+		const sin = Math.sin(rad);
+		const rotate = (p: Point2): { dx: number; dy: number } => {
+			const ox = p.x - cx;
+			const oy = p.y - cy;
+			const nx = cx + ox * cos - oy * sin;
+			const ny = cy + ox * sin + oy * cos;
+			return { dx: nx - p.x, dy: ny - p.y };
+		};
+		for (const idx of vertexIndices(e)) {
+			const pt = vertexOf(e, idx);
+			if (!pt) continue;
+			const { dx, dy } = rotate(pt);
+			this.moveVertex(id, idx, dx, dy);
+		}
+		if (e.type === "ARC") {
+			this.setProps(id, { startAngle: norm360(e.startAngle + deg), endAngle: norm360(e.endAngle + deg) });
+		} else if (e.type === "TEXT" || e.type === "MTEXT") {
+			this.setProps(id, { rotation: norm360(e.rotation + deg) });
 		}
 	}
 
@@ -247,17 +399,88 @@ export class DxfDocument {
 		return this.byId.get(id)?.colorNumber ?? null;
 	}
 
+	// -- layer table editing --------------------------------------------------
+
+	/** Create a new layer (drawable immediately; persisted if a LAYER table exists). */
+	addLayer(name: string, patch: LayerPatch = {}): void {
+		if (this.layerByName.has(name)) {
+			this.updateLayer(name, patch);
+			return;
+		}
+		const colorIndex = patch.colorIndex ?? 7;
+		const info: LayerInfo = {
+			name,
+			color: aciToRgb(colorIndex),
+			colorIndex,
+			visible: patch.visible ?? true,
+			frozen: patch.frozen ?? false,
+			lineType: patch.lineType ?? "CONTINUOUS",
+			lineWeight: patch.lineWeight,
+		};
+		this.layers.push(info);
+		this.layerByName.set(name, info);
+		this.layerColor.set(name, info.color);
+		this.addedLayers.add(name);
+	}
+
+	removeAddedLayer(name: string): void {
+		if (!this.addedLayers.has(name)) return;
+		this.addedLayers.delete(name);
+		this.layerByName.delete(name);
+		this.layerColor.delete(name);
+		const i = this.layers.findIndex((l) => l.name === name);
+		if (i >= 0) this.layers.splice(i, 1);
+	}
+
+	updateLayer(name: string, patch: LayerPatch): void {
+		const l = this.layerByName.get(name);
+		if (!l) return;
+		if (patch.colorIndex !== undefined) {
+			l.colorIndex = patch.colorIndex;
+			l.color = aciToRgb(patch.colorIndex);
+			this.layerColor.set(name, l.color);
+		}
+		if (patch.lineType !== undefined) l.lineType = patch.lineType;
+		if (patch.lineWeight !== undefined) l.lineWeight = patch.lineWeight;
+		if (patch.visible !== undefined) l.visible = patch.visible;
+		if (patch.frozen !== undefined) l.frozen = patch.frozen;
+		// Refresh BYLAYER entity colours so a layer recolour is visible immediately.
+		if (patch.colorIndex !== undefined) {
+			for (const e of this.entities) {
+				if (e.layer === name && e.colorNumber === undefined) e.color = l.color;
+			}
+		}
+		if (!this.addedLayers.has(name)) {
+			const prev = this.layerEdits.get(name) ?? {};
+			this.layerEdits.set(name, { ...prev, ...patch });
+		}
+	}
+
+	/** Current editable state of a layer (for building undo patches). */
+	layerState(name: string): LayerPatch {
+		const l = this.layerByName.get(name);
+		if (!l) return {};
+		return {
+			colorIndex: l.colorIndex,
+			lineType: l.lineType,
+			lineWeight: l.lineWeight,
+			visible: l.visible,
+			frozen: l.frozen,
+		};
+	}
+
 	// -- serialization --------------------------------------------------------
 
-	private buildEdits(): Map<string, EntityEdit> {
-		const edits = new Map<string, EntityEdit>();
+	private buildEntityEdits(): Map<string, DxfTag[] | null> {
+		const edits = new Map<string, DxfTag[] | null>();
 		for (const id of this.deleted) {
 			if (!this.added.has(id)) edits.set(id, null);
 		}
 		for (const [id, s] of this.editState) {
 			if (this.deleted.has(id) || this.added.has(id)) continue;
 			const hasVertexEdit = !!s.pointOffsets && [...s.pointOffsets.values()].some((v) => v.dx !== 0 || v.dy !== 0);
-			if (s.offsetX === 0 && s.offsetY === 0 && s.layer === undefined && s.color === undefined && !hasVertexEdit) continue;
+			const hasCodeEdit = !!s.codeOverrides && s.codeOverrides.size > 0;
+			if (s.offsetX === 0 && s.offsetY === 0 && s.layer === undefined && s.color === undefined && !hasVertexEdit && !hasCodeEdit) continue;
 			const range = this.ranges[id];
 			if (!range) continue;
 			edits.set(id, this.patchTags(range, s));
@@ -281,6 +504,7 @@ export class DxfDocument {
 		const out: DxfTag[] = [];
 		let colorApplied = false;
 		let layerTagIndex = -1;
+		const appliedCodes = new Set<number>();
 		// Track the coordinate-pair ordinal so per-vertex offsets hit the right
 		// point (X code opens a new pair; the matching Y code reuses it).
 		let pair = -1;
@@ -294,6 +518,9 @@ export class DxfDocument {
 			} else if (t.code >= 20 && t.code <= 29) {
 				const vo = s.pointOffsets?.get(pair)?.dy ?? 0;
 				if (s.offsetY !== 0 || vo !== 0) value = fmtReal(parseFloat(t.value) + s.offsetY + vo);
+			} else if (s.codeOverrides?.has(t.code) && !appliedCodes.has(t.code)) {
+				value = s.codeOverrides.get(t.code)!;
+				appliedCodes.add(t.code);
 			}
 			if (t.code === 8 && s.layer !== undefined) value = s.layer;
 			if (t.code === 8) layerTagIndex = out.length;
@@ -308,17 +535,101 @@ export class DxfDocument {
 			const insertAt = layerTagIndex >= 0 ? layerTagIndex + 1 : 1;
 			out.splice(insertAt, 0, { code: 62, value: String(s.color) });
 		}
+		// A code override for a code the entity didn't already carry (e.g. an ARC
+		// gaining group 50/51 it lacked) — append it before the next entity.
+		if (s.codeOverrides) {
+			for (const [code, value] of s.codeOverrides) {
+				if (!appliedCodes.has(code)) out.push({ code, value });
+			}
+		}
+		return out;
+	}
+
+	private buildLayerEdits(): Map<string, DxfTag[]> {
+		const edits = new Map<string, DxfTag[]>();
+		for (const [name, patch] of this.layerEdits) {
+			const range = this.layerRanges[name];
+			if (!range) continue;
+			edits.set(name, this.patchLayerTags(range, patch, this.layerByName.get(name)));
+		}
+		return edits;
+	}
+
+	private patchLayerTags(range: TagRange, patch: LayerPatch, info?: LayerInfo): DxfTag[] {
+		const colorIndex = patch.colorIndex ?? info?.colorIndex ?? 7;
+		const off = patch.visible !== undefined ? !patch.visible : info?.visible === false;
+		const frozen = patch.frozen !== undefined ? patch.frozen : info?.frozen === true;
+		const out: DxfTag[] = [];
+		let has62 = false, has70 = false, has6 = false, has370 = false;
+		let insertAfter = -1;
+		for (let i = range.start; i < range.end; i++) {
+			const t = this.tags[i];
+			let value = t.value;
+			if (t.code === 2) insertAfter = out.length; // after the name
+			if (t.code === 70) {
+				has70 = true;
+				let flags = parseInt(t.value, 10) || 0;
+				flags = frozen ? flags | 1 : flags & ~1;
+				value = String(flags);
+			} else if (t.code === 62) {
+				has62 = true;
+				value = String(off ? -Math.abs(colorIndex) : Math.abs(colorIndex));
+			} else if (t.code === 6 && patch.lineType !== undefined) {
+				has6 = true;
+				value = patch.lineType;
+			} else if (t.code === 370 && patch.lineWeight !== undefined) {
+				has370 = true;
+				value = String(patch.lineWeight);
+			} else if (t.code === 6) {
+				has6 = true;
+			} else if (t.code === 370) {
+				has370 = true;
+			}
+			out.push({ code: t.code, value });
+		}
+		// Insert any codes the original entry lacked, right after the layer name.
+		const inserts: DxfTag[] = [];
+		if (!has70) inserts.push({ code: 70, value: String(frozen ? 1 : 0) });
+		if (!has62) inserts.push({ code: 62, value: String(off ? -Math.abs(colorIndex) : Math.abs(colorIndex)) });
+		if (!has6 && patch.lineType !== undefined) inserts.push({ code: 6, value: patch.lineType });
+		if (!has370 && patch.lineWeight !== undefined) inserts.push({ code: 370, value: String(patch.lineWeight) });
+		if (inserts.length) out.splice(insertAfter >= 0 ? insertAfter + 1 : 1, 0, ...inserts);
+		return out;
+	}
+
+	private buildLayerAdditions(): DxfTag[] {
+		const out: DxfTag[] = [];
+		for (const name of this.addedLayers) {
+			const l = this.layerByName.get(name);
+			if (!l) continue;
+			out.push(...layerToTags(l));
+		}
 		return out;
 	}
 
 	serialize(): string {
+		const replacements: Replacement[] = [];
+		for (const [id, edit] of this.buildEntityEdits()) {
+			const range = this.ranges[id];
+			if (range) replacements.push({ start: range.start, end: range.end, tags: edit });
+		}
+		for (const [name, tags] of this.buildLayerEdits()) {
+			const range = this.layerRanges[name];
+			if (range) replacements.push({ start: range.start, end: range.end, tags });
+		}
+
+		const insertions: Insertion[] = [];
+		const additions = this.buildAdditions();
+		if (this.entitiesEnd >= 0 && additions.length) insertions.push({ at: this.entitiesEnd, tags: additions });
+		const layerAdditions = this.buildLayerAdditions();
+		if (this.layerTableEnd >= 0 && layerAdditions.length) insertions.push({ at: this.layerTableEnd, tags: layerAdditions });
+
 		return serialize({
 			tags: this.tags,
 			newline: this.newline,
-			ranges: this.ranges,
-			edits: this.buildEdits(),
-			additions: this.buildAdditions(),
-			additionsAt: this.entitiesEnd,
+			replacements,
+			insertions,
+			entityAdditions: this.entitiesEnd < 0 ? additions : undefined,
 		});
 	}
 }
@@ -340,6 +651,28 @@ function vertexOf(e: RenderEntity, pairIndex: number): Point2 | null {
 		default:
 			return null;
 	}
+}
+
+/** The set of coordinate-pair ordinals an entity exposes (for rotation). */
+function vertexIndices(e: RenderEntity): number[] {
+	switch (e.type) {
+		case "LINE":
+			return [0, 1];
+		case "LWPOLYLINE":
+		case "POLYLINE":
+			return e.vertices.map((_, i) => i);
+		case "CIRCLE":
+		case "ARC":
+		case "TEXT":
+		case "MTEXT":
+			return [0];
+		default:
+			return [];
+	}
+}
+
+function norm360(deg: number): number {
+	return ((deg % 360) + 360) % 360;
 }
 
 function translate(e: RenderEntity, dx: number, dy: number): void {
@@ -372,6 +705,21 @@ function translate(e: RenderEntity, dx: number, dy: number): void {
 			});
 			break;
 	}
+}
+
+/** Serialize a layer definition to R12-style LAYER table tags. */
+function layerToTags(l: LayerInfo): DxfTag[] {
+	const colorIndex = l.colorIndex ?? 7;
+	const signed = l.visible === false ? -Math.abs(colorIndex) : Math.abs(colorIndex);
+	const tags: DxfTag[] = [
+		{ code: 0, value: "LAYER" },
+		{ code: 2, value: l.name },
+		{ code: 70, value: String(l.frozen ? 1 : 0) },
+		{ code: 62, value: String(signed) },
+		{ code: 6, value: l.lineType ?? "CONTINUOUS" },
+	];
+	if (l.lineWeight !== undefined) tags.push({ code: 370, value: String(l.lineWeight) });
+	return tags;
 }
 
 export { fmtReal };

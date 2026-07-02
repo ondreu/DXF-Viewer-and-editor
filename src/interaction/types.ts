@@ -12,8 +12,10 @@ export type ToolId =
 	| "measure-angle"
 	| "draw-line"
 	| "draw-circle"
+	| "draw-arc"
 	| "draw-polyline"
 	| "draw-text"
+	| "rotate"
 	| "annotate";
 
 export type Measurement =
@@ -30,15 +32,19 @@ export interface ToolContext {
 	pick(world: Point2): string | null;
 	execute(cmd: Command): void;
 	select(id: string | null): void;
+	/** ctrl/cmd+click: add or remove an entity from the selection set */
+	toggleSelection(id: string | null): void;
 	/** currently selected entity handle, if any (for grip editing) */
 	selectedId(): string | null;
+	/** all selected entity handles (for group move / rotate) */
+	selectedIds(): string[];
 	/** id of a note annotation near a world point, for dragging it */
 	annotationAt(world: Point2): string | null;
 	/** move a note annotation; `attachTo` pins it to an entity (or null to detach) */
 	moveAnnotationTo(id: string, at: Point2, attachTo: string | null): void;
 	setOverlay(prims: Overlay): void;
-	/** publish a live/final measurement to the UI (null clears) */
-	reportMeasurement(m: Measurement | null): void;
+	/** publish a live/final measurement to the UI (null clears); points feed "save as annotation" */
+	reportMeasurement(m: Measurement | null, points?: Point2[]): void;
 	addAnnotation(a: Annotation): void;
 	promptText(initial: string): Promise<string | null>;
 	activeLayer(): string;

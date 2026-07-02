@@ -8,6 +8,10 @@
 
 	$: entity = state.selected;
 	$: layers = state.layers;
+	$: multi = state.selectionCount > 1;
+	$: anchor = entity ? controller.document?.anchorOf(entity.id) ?? null : null;
+
+	const num = (e: Event) => parseFloat((e.target as HTMLInputElement).value);
 
 	function onLayer(e: Event) {
 		controller.changeLayer((e.target as HTMLSelectElement).value);
@@ -16,13 +20,35 @@
 		const v = (e.target as HTMLSelectElement).value;
 		controller.changeColor(v === "BYLAYER" ? null : parseInt(v, 10));
 	}
+	function setAnchor(axis: "x" | "y", e: Event) {
+		if (!anchor) return;
+		const v = num(e);
+		if (Number.isNaN(v)) return;
+		controller.setSelectedAnchor(axis === "x" ? v : anchor.x, axis === "y" ? v : anchor.y);
+	}
+	function setProp(patch: Parameters<ViewController["setSelectedProps"]>[0], e: Event) {
+		const v = num(e);
+		if (Number.isNaN(v)) return;
+		const key = Object.keys(patch)[0] as keyof typeof patch;
+		controller.setSelectedProps({ [key]: v } as typeof patch);
+	}
+	function setText(e: Event) {
+		controller.setSelectedProps({ text: (e.target as HTMLInputElement).value });
+	}
+	function lineLen(en: typeof entity): number {
+		if (en && en.type === "LINE") return Math.hypot(en.end.x - en.start.x, en.end.y - en.start.y);
+		return 0;
+	}
 </script>
 
 {#if entity}
-	<Card title="Properties" anchor="anchor-tr" onClose={() => controller.renderer.select(null)}>
+	<Card title={multi ? `${state.selectionCount} selected` : "Properties"} anchor="anchor-tr" onClose={() => controller.clearSelection()}>
+		{#if multi}
+			<div class="dxf-note" style="margin-top:0">Editing applies to all {state.selectionCount} selected entities.</div>
+		{/if}
 		<div class="dxf-kv">
 			<span class="dxf-k">Type</span><span class="dxf-v">{entity.type}</span>
-			<span class="dxf-k">Handle</span><span class="dxf-v">{entity.id || "—"}</span>
+			{#if !multi}<span class="dxf-k">Handle</span><span class="dxf-v">{entity.id || "—"}</span>{/if}
 			<span class="dxf-k">Layer</span>
 			<span class="dxf-v">
 				{#if state.editable}
@@ -52,7 +78,36 @@
 					</select>
 				{:else}{entity.colorNumber ?? "ByLayer"}{/if}
 			</span>
-			{#if entity.type === "TEXT" || entity.type === "MTEXT"}
+
+			{#if state.editable && !multi}
+				{#if anchor}
+					<span class="dxf-k">X</span>
+					<span class="dxf-v"><input class="dxf-num" type="number" step="any" value={anchor.x} on:change={(e) => setAnchor("x", e)} /></span>
+					<span class="dxf-k">Y</span>
+					<span class="dxf-v"><input class="dxf-num" type="number" step="any" value={anchor.y} on:change={(e) => setAnchor("y", e)} /></span>
+				{/if}
+				{#if entity.type === "LINE"}
+					<span class="dxf-k">Length</span><span class="dxf-v dxf-mono">{lineLen(entity).toFixed(4)}</span>
+				{/if}
+				{#if entity.type === "CIRCLE" || entity.type === "ARC"}
+					<span class="dxf-k">Radius</span>
+					<span class="dxf-v"><input class="dxf-num" type="number" step="any" min="0" value={entity.radius} on:change={(e) => setProp({ radius: 0 }, e)} /></span>
+				{/if}
+				{#if entity.type === "ARC"}
+					<span class="dxf-k">Start°</span>
+					<span class="dxf-v"><input class="dxf-num" type="number" step="any" value={entity.startAngle} on:change={(e) => setProp({ startAngle: 0 }, e)} /></span>
+					<span class="dxf-k">End°</span>
+					<span class="dxf-v"><input class="dxf-num" type="number" step="any" value={entity.endAngle} on:change={(e) => setProp({ endAngle: 0 }, e)} /></span>
+				{/if}
+				{#if entity.type === "TEXT" || entity.type === "MTEXT"}
+					<span class="dxf-k">Height</span>
+					<span class="dxf-v"><input class="dxf-num" type="number" step="any" min="0" value={entity.height} on:change={(e) => setProp({ height: 0 }, e)} /></span>
+					<span class="dxf-k">Rotation°</span>
+					<span class="dxf-v"><input class="dxf-num" type="number" step="any" value={entity.rotation} on:change={(e) => setProp({ rotation: 0 }, e)} /></span>
+					<span class="dxf-k">Text</span>
+					<span class="dxf-v"><input class="dxf-num" type="text" value={entity.text} on:change={setText} /></span>
+				{/if}
+			{:else if entity.type === "TEXT" || entity.type === "MTEXT"}
 				<span class="dxf-k">Text</span><span class="dxf-v dxf-mono">{entity.text}</span>
 			{/if}
 			{#if entity.type === "UNSUPPORTED"}
@@ -62,11 +117,15 @@
 
 		{#if state.editable}
 			<div class="dxf-actions">
-				<span class="dxf-note">Drag the grips or body on canvas to move.</span>
+				<div class="dxf-rot-group">
+					<button class="dxf-icon-btn" title="Rotate 90° CCW" on:click={() => controller.rotateSelected(90)} use:icon={"rotate-ccw"} />
+					<button class="dxf-icon-btn" title="Rotate 90° CW" on:click={() => controller.rotateSelected(-90)} use:icon={"rotate-cw"} />
+				</div>
 				<button class="dxf-icon-btn danger" title="Delete (Del)" on:click={() => controller.deleteSelected()} use:icon={"trash-2"} />
 			</div>
+			<div class="dxf-note">Drag grips/body to move · Rotate tool for free angle.</div>
 		{:else}
-			<div class="dxf-note">View-only in v1.</div>
+			<div class="dxf-note">This entity type is view-only.</div>
 		{/if}
 	</Card>
 {/if}

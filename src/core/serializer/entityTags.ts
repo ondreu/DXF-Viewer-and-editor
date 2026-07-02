@@ -28,6 +28,12 @@ export function entityToTags(e: RenderEntity, handle: string): DxfTag[] | null {
 			pt(e.center.x, e.center.y, 10, 20, 30);
 			tags.push({ code: 40, value: fmtReal(e.radius) });
 			return tags;
+		case "ARC":
+			pt(e.center.x, e.center.y, 10, 20, 30);
+			tags.push({ code: 40, value: fmtReal(e.radius) });
+			tags.push({ code: 50, value: fmtReal(e.startAngle) });
+			tags.push({ code: 51, value: fmtReal(e.endAngle) });
+			return tags;
 		case "LWPOLYLINE":
 			tags.push({ code: 90, value: String(e.vertices.length) });
 			tags.push({ code: 70, value: e.closed ? "1" : "0" });
@@ -40,6 +46,7 @@ export function entityToTags(e: RenderEntity, handle: string): DxfTag[] | null {
 			pt(e.position.x, e.position.y, 10, 20, 30);
 			tags.push({ code: 40, value: fmtReal(e.height) });
 			tags.push({ code: 1, value: e.text });
+			if (e.rotation) tags.push({ code: 50, value: fmtReal(e.rotation) });
 			return tags;
 		default:
 			return null;

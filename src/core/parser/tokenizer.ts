@@ -56,6 +56,53 @@ export function findEntitiesSection(tags: DxfTag[]): TagRange | null {
 }
 
 /**
+ * Locate the LAYER table and split it into per-layer tag ranges (keyed by name,
+ * group code 2), plus the index of its ENDTAB tag so new layers can be injected
+ * just before it. Returns null when the file has no LAYER table.
+ */
+export function indexLayerTable(
+	tags: DxfTag[]
+): { ranges: Record<string, TagRange>; endTab: number } | null {
+	let start = -1;
+	for (let i = 0; i < tags.length - 1; i++) {
+		if (tags[i].code === 0 && tags[i].value === "TABLE" && tags[i + 1].code === 2 && tags[i + 1].value === "LAYER") {
+			start = i + 2;
+			break;
+		}
+	}
+	if (start === -1) return null;
+	let endTab = -1;
+	for (let i = start; i < tags.length; i++) {
+		if (tags[i].code === 0 && tags[i].value === "ENDTAB") {
+			endTab = i;
+			break;
+		}
+	}
+	if (endTab === -1) return null;
+
+	const ranges: Record<string, TagRange> = {};
+	let cursor = start;
+	while (cursor < endTab) {
+		if (!(tags[cursor].code === 0 && tags[cursor].value === "LAYER")) {
+			cursor++;
+			continue;
+		}
+		let next = cursor + 1;
+		while (next < endTab && tags[next].code !== 0) next++;
+		let name = "";
+		for (let i = cursor + 1; i < next; i++) {
+			if (tags[i].code === 2) {
+				name = tags[i].value;
+				break;
+			}
+		}
+		if (name) ranges[name] = { start: cursor, end: next };
+		cursor = next;
+	}
+	return { ranges, endTab };
+}
+
+/**
  * Split the ENTITIES section into per-entity tag ranges, keyed by handle
  * (group code 5). Entities without a handle are still returned (in `anonymous`)
  * so they render, but cannot be safely addressed for editing.
