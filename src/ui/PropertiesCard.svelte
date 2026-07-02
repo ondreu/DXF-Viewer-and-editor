@@ -5,12 +5,9 @@
 
 	export let controller: ViewController;
 	export let state: ControllerState;
-	export let nudgeStep = 1;
 
 	$: entity = state.selected;
 	$: layers = state.layers;
-
-	const nudge = (dx: number, dy: number) => controller.moveSelected(dx, dy);
 
 	function onLayer(e: Event) {
 		controller.changeLayer((e.target as HTMLSelectElement).value);
@@ -64,16 +61,9 @@
 		</div>
 
 		{#if state.editable}
-			<div class="dxf-nudge">
-				<span />
-				<button class="dxf-icon-btn" title="Move up" on:click={() => nudge(0, nudgeStep)} use:icon={"arrow-up"} />
-				<span />
-				<button class="dxf-icon-btn" title="Move left" on:click={() => nudge(-nudgeStep, 0)} use:icon={"arrow-left"} />
-				<button class="dxf-icon-btn danger" title="Delete" on:click={() => controller.deleteSelected()} use:icon={"trash-2"} />
-				<button class="dxf-icon-btn" title="Move right" on:click={() => nudge(nudgeStep, 0)} use:icon={"arrow-right"} />
-				<span />
-				<button class="dxf-icon-btn" title="Move down" on:click={() => nudge(0, -nudgeStep)} use:icon={"arrow-down"} />
-				<span />
+			<div class="dxf-actions">
+				<span class="dxf-note">Drag the grips or body on canvas to move.</span>
+				<button class="dxf-icon-btn danger" title="Delete (Del)" on:click={() => controller.deleteSelected()} use:icon={"trash-2"} />
 			</div>
 		{:else}
 			<div class="dxf-note">View-only in v1.</div>

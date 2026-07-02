@@ -10,7 +10,7 @@
 
 	export let controller: ViewController;
 	export let onSave: () => void;
-	export let nudgeStep = 1;
+	export let onScreenshot: () => void;
 
 	let state: ControllerState = controller.getState();
 	let unsub: (() => void) | null = null;
@@ -31,6 +31,8 @@
 	<div class="dxf-ui-top">
 		<button class="dxf-icon-btn" title="Fit to view" on:click={() => controller.fit()} use:icon={"maximize"} />
 		<button class="dxf-icon-btn" class:is-active={state.gridVisible} title="Toggle grid" on:click={() => controller.toggleGrid()} use:icon={"grid"} />
+		<button class="dxf-icon-btn" class:is-active={state.snap.enabled} title="Toggle snapping" on:click={() => controller.setSnap({ enabled: !state.snap.enabled })} use:icon={"magnet"} />
+		<button class="dxf-icon-btn" title="Screenshot (PNG to vault)" on:click={onScreenshot} use:icon={"camera"} />
 		<span class="dxf-top-sep" />
 		<button class="dxf-icon-btn" title="Undo" disabled={!state.canUndo} on:click={() => controller.undo()} use:icon={"undo-2"} />
 		<button class="dxf-icon-btn" title="Redo" disabled={!state.canRedo} on:click={() => controller.redo()} use:icon={"redo-2"} />
@@ -43,7 +45,7 @@
 		</button>
 	</div>
 
-	<PropertiesCard {controller} {state} {nudgeStep} />
+	<PropertiesCard {controller} {state} />
 	<MeasureCard {controller} {state} />
 	{#if showLayers}
 		<LayersCard {controller} {state} onClose={() => (showLayers = false)} />

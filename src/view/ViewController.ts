@@ -95,9 +95,13 @@ export class ViewController {
 			execute: (cmd: Command) => {
 				this.stack?.execute(cmd);
 				this.renderer.rebuild();
+				this.syncAttachedAnnotations();
 				this.emit();
 			},
 			select: (id) => this.renderer.select(id),
+			selectedId: () => this.selectedId,
+			annotationAt: (world) => this.annotationAt(world),
+			moveAnnotationTo: (id, at, attachTo) => this.moveAnnotationTo(id, at, attachTo),
 			setOverlay: (prims) => {
 				this.toolOverlay = prims;
 				this.composeOverlay();
@@ -114,6 +118,58 @@ export class ViewController {
 			accent: this.accent,
 			touch: () => this.emit(),
 		};
+	}
+
+	private annotationAt(world: { x: number; y: number }): string | null {
+		const tol = this.renderer.pixelsToWorld(14);
+		let best: string | null = null;
+		let bestD = tol;
+		for (const a of this.annotations.all) {
+			if (a.kind !== "note") continue;
+			const d = Math.hypot(a.at.x - world.x, a.at.y - world.y);
+			if (d <= bestD) {
+				bestD = d;
+				best = a.id;
+			}
+		}
+		return best;
+	}
+
+	private moveAnnotationTo(id: string, at: { x: number; y: number }, attachTo: string | null): void {
+		if (attachTo && this.doc) {
+			const anchor = this.doc.anchorOf(attachTo);
+			if (anchor) {
+				this.annotations.update(id, { at, attachedTo: attachTo, offset: { x: at.x - anchor.x, y: at.y - anchor.y } });
+				return;
+			}
+		}
+		this.annotations.update(id, { at, attachedTo: undefined, offset: undefined });
+	}
+
+	/** Reposition notes pinned to entities after any geometry edit. */
+	private syncAttachedAnnotations(): void {
+		if (!this.doc) return;
+		for (const a of this.annotations.all) {
+			if (a.kind !== "note" || !a.attachedTo) continue;
+			const anchor = this.doc.anchorOf(a.attachedTo);
+			if (!anchor) {
+				this.annotations.update(a.id, { attachedTo: undefined, offset: undefined });
+				continue;
+			}
+			const off = a.offset ?? { x: 0, y: 0 };
+			this.annotations.update(a.id, { at: { x: anchor.x + off.x, y: anchor.y + off.y } });
+		}
+	}
+
+	clearMeasurement(): void {
+		this.measurement = null;
+		this.toolOverlay = [];
+		this.composeOverlay();
+		this.emit();
+	}
+
+	screenshotPNG(): string {
+		return this.renderer.snapshot();
 	}
 
 	private snapAt(world: { x: number; y: number }): SnapResult | null {
@@ -220,6 +276,7 @@ export class ViewController {
 		if (!this.stack) return;
 		this.stack.execute(cmd);
 		this.renderer.refreshEntity(id);
+		this.syncAttachedAnnotations();
 		this.emit();
 	}
 
@@ -251,12 +308,14 @@ export class ViewController {
 	undo(): void {
 		this.stack?.undo();
 		this.renderer.rebuild();
+		this.syncAttachedAnnotations();
 		this.reconcileSelection();
 	}
 
 	redo(): void {
 		this.stack?.redo();
 		this.renderer.rebuild();
+		this.syncAttachedAnnotations();
 		this.reconcileSelection();
 	}
 

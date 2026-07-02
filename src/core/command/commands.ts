@@ -27,6 +27,22 @@ export class MoveCommand implements Command {
 	}
 }
 
+export class MoveVertexCommand implements Command {
+	readonly label = "Move vertex";
+	constructor(
+		private readonly id: string,
+		private readonly pairIndex: number,
+		private readonly dx: number,
+		private readonly dy: number
+	) {}
+	do(doc: DxfDocument): void {
+		doc.moveVertex(this.id, this.pairIndex, this.dx, this.dy);
+	}
+	undo(doc: DxfDocument): void {
+		doc.moveVertex(this.id, this.pairIndex, -this.dx, -this.dy);
+	}
+}
+
 export class DeleteCommand implements Command {
 	readonly label = "Delete";
 	constructor(private readonly id: string) {}

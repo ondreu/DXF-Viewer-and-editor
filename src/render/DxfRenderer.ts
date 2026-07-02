@@ -32,7 +32,8 @@ export type RendererEvents = {
 
 export type PointerPhase = "down" | "move" | "up" | "click";
 export interface ToolPointerHandler {
-	(phase: PointerPhase, world: Point2, ev: PointerEvent): void;
+	/** for phase "down" in pan mode, return true to consume (e.g. grabbed a grip) */
+	(phase: PointerPhase, world: Point2, ev: PointerEvent): boolean | void;
 }
 
 const PICK_PIXELS = 8;
@@ -77,7 +78,8 @@ export class DxfRenderer {
 
 	constructor(private container: HTMLElement, theme: Partial<RenderTheme> = {}) {
 		this.theme = { ...DEFAULT_THEME, ...theme };
-		this.renderer = new WebGLRenderer({ antialias: true, alpha: true });
+		// preserveDrawingBuffer lets the screenshot read pixels after compositing.
+		this.renderer = new WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
 		this.renderer.setPixelRatio(window.devicePixelRatio || 1);
 		this.container.appendChild(this.renderer.domElement);
 		const s = this.renderer.domElement.style;
@@ -105,6 +107,13 @@ export class DxfRenderer {
 
 	pixelsToWorld(px: number): number {
 		return px * this.unitsPerPixel;
+	}
+
+	/** Render synchronously and return a PNG data URL of the current view. */
+	snapshot(): string {
+		this.rebuildGrid();
+		this.renderer.render(this.scene, this.camera);
+		return this.renderer.domElement.toDataURL("image/png");
 	}
 
 	worldFromClient(clientX: number, clientY: number): Point2 {
@@ -357,15 +366,20 @@ export class DxfRenderer {
 		for (let y = Math.ceil(bottom / step) * step; y <= top && count < maxLines; y += step, count++) {
 			push(isMajor(y) ? majorArr : minor, left, y, right, y);
 		}
-		const minorColor = new Color(this.theme.grid);
-		const majorColor = new Color(this.theme.grid).lerp(new Color(this.theme.foreground), 0.35);
-		if (minor.length) this.gridGroup.add(this.segments(minor, minorColor.getHex()));
-		if (majorArr.length) this.gridGroup.add(this.segments(majorArr, majorColor.getHex()));
+		// Keep the grid barely visible so it never competes with the drawing.
+		const gridColor = new Color(this.theme.grid).getHex();
+		if (minor.length) this.gridGroup.add(this.segments(minor, gridColor, 0.12));
+		if (majorArr.length) this.gridGroup.add(this.segments(majorArr, gridColor, 0.28));
 	}
 
-	private segments(arr: number[], color: number): LineSegments {
+	private segments(arr: number[], color: number, opacity = 1): LineSegments {
 		const geom = new BufferGeometry().setAttribute("position", new Float32BufferAttribute(arr, 3));
-		return new LineSegments(geom, new LineBasicMaterial({ color }));
+		const mat = new LineBasicMaterial({ color });
+		if (opacity < 1) {
+			mat.transparent = true;
+			mat.opacity = opacity;
+		}
+		return new LineSegments(geom, mat);
 	}
 
 	// -- overlay --------------------------------------------------------------
@@ -517,11 +531,19 @@ export class DxfRenderer {
 			moved = false;
 			el.setPointerCapture(ev.pointerId);
 			const secondary = ev.button === 1 || ev.button === 2;
-			if (secondary || (ev.button === 0 && this.panWithLeftDrag)) {
+			if (secondary) {
 				panning = true;
-				leftMaybeClick = ev.button === 0;
 			} else if (ev.button === 0) {
-				this.emitTool("down", ev);
+				if (this.panWithLeftDrag) {
+					// Select tool: let it grab a grip; if it doesn't, we pan/click.
+					const consumed = this.emitTool("down", ev) === true;
+					if (!consumed) {
+						panning = true;
+						leftMaybeClick = true;
+					}
+				} else {
+					this.emitTool("down", ev);
+				}
 			}
 		});
 
@@ -582,9 +604,9 @@ export class DxfRenderer {
 		);
 	}
 
-	private emitTool(phase: PointerPhase, ev: PointerEvent): void {
-		if (!this.pointerHandler) return;
-		this.pointerHandler(phase, this.screenToWorld(ev.clientX, ev.clientY), ev);
+	private emitTool(phase: PointerPhase, ev: PointerEvent): boolean {
+		if (!this.pointerHandler) return false;
+		return this.pointerHandler(phase, this.screenToWorld(ev.clientX, ev.clientY), ev) === true;
 	}
 
 	private handleSelectClick(ev: PointerEvent): void {
