@@ -1,0 +1,192 @@
+/*
+ * DXF Viewer & Editor — styling follows the active Obsidian theme via CSS
+ * variables (design doc: "UI follows Obsidian UI theme"). No hard-coded colors
+ * so light/dark and community themes are respected automatically.
+ */
+
+.dxf-view-root {
+	display: flex;
+	flex-direction: column;
+	height: 100%;
+	padding: 0;
+	overflow: hidden;
+}
+
+/* -- toolbar --------------------------------------------------------------- */
+.dxf-toolbar {
+	display: flex;
+	align-items: center;
+	gap: var(--size-2-2);
+	padding: var(--size-2-2) var(--size-4-2);
+	border-bottom: 1px solid var(--background-modifier-border);
+	background: var(--background-secondary);
+	flex: 0 0 auto;
+}
+
+.dxf-tb-btn {
+	font-size: var(--font-ui-small);
+	padding: var(--size-2-1) var(--size-2-3);
+	border-radius: var(--radius-s);
+	background: var(--interactive-normal);
+	color: var(--text-normal);
+	border: none;
+	cursor: pointer;
+	box-shadow: none;
+}
+.dxf-tb-btn:hover:not(:disabled) {
+	background: var(--interactive-hover);
+}
+.dxf-tb-btn:disabled {
+	opacity: 0.4;
+	cursor: default;
+}
+.dxf-tb-btn.mod-cta {
+	background: var(--interactive-accent);
+	color: var(--text-on-accent);
+}
+.dxf-tb-btn.mod-cta:hover {
+	background: var(--interactive-accent-hover);
+}
+.dxf-tb-sep {
+	width: 1px;
+	align-self: stretch;
+	background: var(--background-modifier-border);
+	margin: 0 var(--size-2-1);
+}
+.dxf-tb-spacer {
+	flex: 1 1 auto;
+}
+.dxf-dirty {
+	color: var(--text-accent);
+	font-size: var(--font-ui-smaller);
+	margin-right: var(--size-2-3);
+}
+
+/* -- body: canvas + sidebar ----------------------------------------------- */
+.dxf-body {
+	display: flex;
+	flex: 1 1 auto;
+	min-height: 0;
+}
+.dxf-canvas {
+	flex: 1 1 auto;
+	min-width: 0;
+	position: relative;
+	background: var(--background-primary);
+}
+.dxf-sidebar-slot,
+.dxf-sidebar {
+	flex: 0 0 240px;
+	width: 240px;
+	overflow-y: auto;
+	border-left: 1px solid var(--background-modifier-border);
+	background: var(--background-secondary);
+}
+
+/* -- panels ---------------------------------------------------------------- */
+.dxf-panel {
+	padding: var(--size-4-2);
+	border-bottom: 1px solid var(--background-modifier-border);
+}
+.dxf-panel-title {
+	font-size: var(--font-ui-small);
+	font-weight: var(--font-semibold);
+	color: var(--text-muted);
+	text-transform: uppercase;
+	letter-spacing: 0.05em;
+	margin-bottom: var(--size-2-3);
+}
+.dxf-panel-subtitle {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+	margin: var(--size-4-2) 0 var(--size-2-2);
+}
+.dxf-panel-empty,
+.dxf-panel-note {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+	font-style: italic;
+}
+.dxf-panel-note {
+	margin-top: var(--size-2-3);
+}
+
+.dxf-prop-grid {
+	display: grid;
+	grid-template-columns: auto 1fr;
+	gap: var(--size-2-1) var(--size-2-3);
+	align-items: center;
+	font-size: var(--font-ui-small);
+}
+.dxf-prop-key {
+	color: var(--text-muted);
+}
+.dxf-prop-val {
+	color: var(--text-normal);
+	overflow-wrap: anywhere;
+}
+.dxf-prop-val .dropdown {
+	width: 100%;
+}
+.dxf-prop-text {
+	font-family: var(--font-monospace);
+	font-size: var(--font-ui-smaller);
+	white-space: pre-wrap;
+}
+
+/* -- nudge pad ------------------------------------------------------------- */
+.dxf-nudge {
+	display: grid;
+	grid-template-columns: repeat(3, 1fr);
+	gap: var(--size-2-1);
+	max-width: 150px;
+}
+.dxf-nudge .dxf-tb-btn {
+	aspect-ratio: 1;
+}
+
+/* -- layers ---------------------------------------------------------------- */
+.dxf-layer-list {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+}
+.dxf-layer-row {
+	display: flex;
+	align-items: center;
+	gap: var(--size-2-3);
+	padding: var(--size-2-1) 0;
+	font-size: var(--font-ui-small);
+}
+.dxf-layer-swatch {
+	width: 12px;
+	height: 12px;
+	border-radius: var(--radius-s);
+	border: 1px solid var(--background-modifier-border);
+	flex: 0 0 auto;
+}
+.dxf-layer-name {
+	color: var(--text-normal);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+/* -- error + embed --------------------------------------------------------- */
+.dxf-error {
+	padding: var(--size-4-4);
+	color: var(--text-error);
+	font-size: var(--font-ui-small);
+}
+.dxf-embed {
+	position: relative;
+	width: 100%;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-m);
+	overflow: hidden;
+	background: var(--background-primary);
+}
+.dxf-embed .dxf-canvas {
+	width: 100%;
+	height: 100%;
+}

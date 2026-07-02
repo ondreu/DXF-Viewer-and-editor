@@ -1,0 +1,10 @@
+{
+  "id": "dxf-viewer-editor",
+  "name": "DXF Viewer & Editor",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.0",
+  "description": "View and lightly edit DXF drawings as file views and note embeds, on desktop and mobile.",
+  "author": "ondreu",
+  "authorUrl": "https://github.com/ondreu/dxf-viewer-and-editor",
+  "isDesktopOnly": false
+}
