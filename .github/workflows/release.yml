@@ -6,9 +6,14 @@ name: Release Obsidian plugin
 # `version` in manifest.json exactly (no leading "v"), and the release must
 # carry main.js, manifest.json and styles.css as assets.
 on:
+  # Preferred: push a version tag equal to manifest.json version, e.g.
+  #   git tag 0.1.0 && git push origin 0.1.0
   push:
     tags:
       - "*.*.*"
+  # Fallback: run manually from the Actions tab (or API). The tag is taken from
+  # manifest.json and created by the release step, so no local tag push needed.
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -29,21 +34,32 @@ jobs:
       - name: Build plugin
         run: npm run build
 
-      - name: Verify tag matches manifest version
+      - name: Resolve release tag
+        id: tag
         run: |
-          tag="${GITHUB_REF#refs/tags/}"
           manifest_version="$(node -p "require('./manifest.json').version")"
-          if [ "$tag" != "$manifest_version" ]; then
-            echo "Tag ($tag) does not match manifest version ($manifest_version)." >&2
-            exit 1
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            tag="${GITHUB_REF#refs/tags/}"
+            if [ "$tag" != "$manifest_version" ]; then
+              echo "Tag ($tag) does not match manifest version ($manifest_version)." >&2
+              exit 1
+            fi
+          else
+            tag="$manifest_version"
           fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          tag="${GITHUB_REF#refs/tags/}"
-          gh release create "$tag" \
-            --title="$tag" \
-            --notes="Automated release for $tag. Install via BRAT using this repository." \
-            main.js manifest.json styles.css versions.json
+          tag="${{ steps.tag.outputs.tag }}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" main.js manifest.json styles.css versions.json --clobber
+          else
+            gh release create "$tag" \
+              --title="$tag" \
+              --notes="Automated release for $tag. Install via BRAT using this repository." \
+              --target "$GITHUB_SHA" \
+              main.js manifest.json styles.css versions.json
+          fi
