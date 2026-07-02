@@ -12,14 +12,26 @@ export type ToolId =
 	| "measure-angle"
 	| "draw-line"
 	| "draw-circle"
+	| "draw-circle-2p"
+	| "draw-circle-3p"
 	| "draw-arc"
+	| "draw-arc-3p"
 	| "draw-polyline"
 	| "draw-rectangle"
+	| "draw-polygon"
 	| "draw-text"
 	| "rotate"
 	| "scale"
 	| "mirror"
 	| "copy"
+	| "fillet"
+	| "chamfer"
+	| "trim"
+	| "extend"
+	| "offset"
+	| "array-rect"
+	| "array-polar"
+	| "match-props"
 	| "annotate";
 
 export type Measurement =
@@ -50,7 +62,7 @@ export interface ToolContext {
 	/** publish a live/final measurement to the UI (null clears); points feed "save as annotation" */
 	reportMeasurement(m: Measurement | null, points?: Point2[]): void;
 	addAnnotation(a: Annotation): void;
-	promptText(initial: string): Promise<string | null>;
+	promptText(initial: string, title?: string): Promise<string | null>;
 	activeLayer(): string;
 	/** active ACI colour, or null for BYLAYER */
 	activeColor(): number | null;

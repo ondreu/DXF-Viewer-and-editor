@@ -86,18 +86,24 @@
 .dxf-ui-left {
 	position: absolute;
 	left: 10px;
-	top: 50%;
-	transform: translateY(-50%);
+	top: 10px;
+	bottom: 10px;
+	display: flex;
+	align-items: center;
+	pointer-events: none;
 }
 .dxf-palette {
 	display: flex;
 	flex-direction: column;
 	gap: 2px;
 	padding: 4px;
+	max-height: 100%;
+	overflow-y: auto;
 	background: var(--background-secondary);
 	border: 1px solid var(--background-modifier-border);
 	border-radius: var(--radius-m);
 	box-shadow: var(--shadow-s);
+	pointer-events: auto;
 }
 .dxf-palette-sep {
 	height: 1px;

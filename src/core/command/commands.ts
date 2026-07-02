@@ -12,6 +12,17 @@ export interface Command {
 	undo(doc: DxfDocument): void;
 }
 
+/** Groups several commands into one undo/redo step (fillet, chamfer, array, ...). */
+export class BatchCommand implements Command {
+	constructor(private readonly commands: Command[], readonly label = "Edit") {}
+	do(doc: DxfDocument): void {
+		for (const c of this.commands) c.do(doc);
+	}
+	undo(doc: DxfDocument): void {
+		for (let i = this.commands.length - 1; i >= 0; i--) this.commands[i].undo(doc);
+	}
+}
+
 export class MoveCommand implements Command {
 	readonly label = "Move";
 	constructor(
@@ -182,7 +193,7 @@ export class MirrorCommand implements Command {
 }
 
 /** Build a draw spec that duplicates `e`'s geometry offset by (dx, dy). */
-function specFromEntity(e: RenderEntity, dx: number, dy: number): NewEntitySpec | null {
+export function specFromEntity(e: RenderEntity, dx: number, dy: number): NewEntitySpec | null {
 	const shift = (p: Point2): Point2 => ({ x: p.x + dx, y: p.y + dy });
 	switch (e.type) {
 		case "LINE":
@@ -211,6 +222,34 @@ export class CopyCommand implements Command {
 			const spec = e ? specFromEntity(e, this.dx, this.dy) : null;
 			if (!spec) return null;
 			return doc.addEntity(spec, this.handles[i] ?? undefined);
+		});
+	}
+	undo(doc: DxfDocument): void {
+		for (const h of this.handles) if (h) doc.removeAdded(h);
+	}
+	get createdHandles(): string[] {
+		return this.handles.filter((h): h is string => !!h);
+	}
+}
+
+/** Duplicate one or more entities, rotating each new copy by `angleDeg` about a pivot (polar array). */
+export class PolarCopyCommand implements Command {
+	readonly label = "Array (polar)";
+	private handles: (string | null)[] = [];
+	constructor(
+		private readonly ids: string[],
+		private readonly cx: number,
+		private readonly cy: number,
+		private readonly angleDeg: number
+	) {}
+	do(doc: DxfDocument): void {
+		this.handles = this.ids.map((id, i) => {
+			const e = doc.getEntity(id);
+			const spec = e ? specFromEntity(e, 0, 0) : null;
+			if (!spec) return null;
+			const h = doc.addEntity(spec, this.handles[i] ?? undefined);
+			doc.rotate(h, this.cx, this.cy, this.angleDeg);
+			return h;
 		});
 	}
 	undo(doc: DxfDocument): void {

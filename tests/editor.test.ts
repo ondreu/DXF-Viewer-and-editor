@@ -12,6 +12,9 @@ import {
 	ScaleCommand,
 	MirrorCommand,
 	CopyCommand,
+	PolarCopyCommand,
+	BatchCommand,
+	MoveCommand,
 	AddLayerCommand,
 	UpdateLayerCommand,
 } from "../src/core/command/commands";
@@ -153,6 +156,47 @@ describe("copy", () => {
 		expect(copy.end).toEqual({ x: before.end.x + 10, y: before.end.y + 20 });
 		stack.undo();
 		expect(doc.getEntity(newId)).toBeUndefined();
+		expect(tagPairs(doc.serialize())).toBe(tagPairs(FIXTURE));
+	});
+});
+
+describe("polar array (PolarCopyCommand)", () => {
+	it("copies an entity rotated about a pivot, keeping the original untouched", () => {
+		const doc = load();
+		const circle = doc.entities.find((e) => e.type === "CIRCLE") as CircleEntity;
+		const before = { ...circle.center };
+		const stack = new CommandStack(doc);
+		const cmd = new PolarCopyCommand([circle.id], 0, 0, 90);
+		stack.execute(cmd);
+		expect(circle.center).toEqual(before);
+		const [newId] = cmd.createdHandles;
+		const copy = doc.getEntity(newId) as CircleEntity;
+		// original centre (50,50) rotated 90deg CCW about the origin -> (-50,50)
+		expect(copy.center.x).toBeCloseTo(-50, 6);
+		expect(copy.center.y).toBeCloseTo(50, 6);
+		expect(copy.radius).toBe(circle.radius);
+		stack.undo();
+		expect(doc.getEntity(newId)).toBeUndefined();
+		expect(tagPairs(doc.serialize())).toBe(tagPairs(FIXTURE));
+	});
+});
+
+describe("BatchCommand", () => {
+	it("undoes every grouped command in one step, in reverse order", () => {
+		const doc = load();
+		const line = doc.entities.find((e) => e.type === "LINE") as LineEntity;
+		const circle = doc.entities.find((e) => e.type === "CIRCLE") as CircleEntity;
+		const beforeLine = { start: { ...line.start }, end: { ...line.end } };
+		const beforeCircle = { ...circle.center };
+		const stack = new CommandStack(doc);
+		stack.execute(new BatchCommand([new MoveCommand(line.id, 5, 5), new MoveCommand(circle.id, -5, -5)], "Array (rectangular)"));
+		expect(line.start).toEqual({ x: beforeLine.start.x + 5, y: beforeLine.start.y + 5 });
+		expect(circle.center).toEqual({ x: beforeCircle.x - 5, y: beforeCircle.y - 5 });
+		expect(stack.canUndo).toBe(true);
+		stack.undo();
+		expect(line.start).toEqual(beforeLine.start);
+		expect(line.end).toEqual(beforeLine.end);
+		expect(circle.center).toEqual(beforeCircle);
 		expect(tagPairs(doc.serialize())).toBe(tagPairs(FIXTURE));
 	});
 });

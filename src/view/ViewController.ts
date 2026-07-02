@@ -50,7 +50,7 @@ export type ControllerEvents = { state: ControllerState };
 
 export interface ViewControllerOptions {
 	theme: Partial<RenderTheme>;
-	promptText: (initial: string) => Promise<string | null>;
+	promptText: (initial: string, title?: string) => Promise<string | null>;
 }
 
 /**
@@ -77,7 +77,7 @@ export class ViewController {
 	private activeColorAci: number | null = null;
 	private measurement: Measurement | null = null;
 	private toolOverlay: Overlay = [];
-	private promptText: (initial: string) => Promise<string | null>;
+	private promptText: (initial: string, title?: string) => Promise<string | null>;
 
 	constructor(container: HTMLElement, opts: ViewControllerOptions) {
 		this.renderer = new DxfRenderer(container, opts.theme);
@@ -118,7 +118,7 @@ export class ViewController {
 				this.emit();
 			},
 			addAnnotation: (a) => this.annotations.add(a),
-			promptText: (initial) => this.promptText(initial),
+			promptText: (initial, title) => this.promptText(initial, title),
 			activeLayer: () => this.activeLayerName,
 			activeColor: () => this.activeColorAci,
 			pixelSize: () => this.renderer.pixelSize,

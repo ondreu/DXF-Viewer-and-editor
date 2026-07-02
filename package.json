@@ -1,6 +1,6 @@
 {
   "name": "obsidian-dxf-viewer-editor",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "View and lightly edit DXF drawings inside Obsidian, on desktop and mobile.",
   "main": "main.js",
   "type": "module",

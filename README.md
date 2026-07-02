@@ -26,8 +26,10 @@ This is **v1: DXF only**. DWG is intentionally out of scope (see
 - **Measure** — distance (with Δx/Δy and angle), radius/diameter/circumference,
   and three-point angle, shown in a floating readout. Measurements can be saved
   as visible annotations.
-- **Draw** — line, circle, **arc**, polyline, **rectangle** and text. Drawn
-  geometry becomes **real DXF entities** written back to the file on save.
+- **Draw** — line, circle (centre+radius, 2-point or 3-point), arc
+  (centre+start+end or 3-point), polyline, rectangle and regular polygon
+  (any side count), plus text. Drawn geometry becomes **real DXF entities**
+  written back to the file on save.
 - **Editing** — move, copy, rotate, scale, mirror, delete, and change the
   layer/colour of `LINE`, `CIRCLE`, `ARC`, `LWPOLYLINE` and `TEXT` entities,
   with undo/redo.
@@ -39,6 +41,18 @@ This is **v1: DXF only**. DWG is intentionally out of scope (see
   buttons, scale (pivot + drag factor), mirror (pick a mirror line) and copy
   (base point + destination), working on single entities or a whole
   multi-selection.
+- **Corner tools** — fillet (round a corner between two lines with a tangent
+  arc) and chamfer (bevel it with a straight cut), both prompting for the
+  radius/distance and trimming the two lines automatically.
+- **Trim / extend** — click a cutting edge (line, circle, arc or polyline),
+  then click a line or arc to trim it back to that edge, or a line to stretch
+  it out to a boundary.
+- **Offset** — click a line, circle or arc, then click a side/distance for a
+  parallel copy on the same layer.
+- **Arrays** — rectangular (columns/rows/spacing) and polar (count + angle
+  about a picked centre), both as one grouped undo step.
+- **Match properties** — an eyedropper that copies a source entity's
+  layer/colour onto others you click.
 - **Layer management** — add layers and set their colour, linetype and
   lineweight; **hide/show** and **freeze/thaw** layers. Edits are written back
   into the DXF `LAYER` table on save.
@@ -58,8 +72,10 @@ This is **v1: DXF only**. DWG is intentionally out of scope (see
 ### Interface
 
 - **Left palette**: select · measure (distance / radius / angle) · draw (line /
-  circle / arc / polyline / rectangle / text) · copy / rotate / scale / mirror ·
-  note.
+  circle [centre-radius, 2-point, 3-point] / arc [centre-based, 3-point] /
+  polyline / rectangle / polygon / text) · copy / rotate / scale / mirror ·
+  fillet / chamfer / trim / extend / offset · array (rectangular / polar) ·
+  match properties · note.
 - **Top bar**: fit · grid toggle · snap toggle · screenshot · undo · redo ·
   delete selection · layers · annotations · save (a dot marks unsaved changes).
 - **Keyboard**: `Esc` cancels the current tool operation, `Enter` finishes a
