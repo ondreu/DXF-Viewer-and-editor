@@ -18,7 +18,9 @@ function load(text = FIXTURE): { result: ParseResult; doc: DxfDocument } {
 		result.ranges,
 		result.entities,
 		result.layers,
-		result.fullyAddressable
+		result.fullyAddressable,
+		result.entitiesEnd,
+		result.maxHandle
 	);
 	return { result, doc };
 }

@@ -1,9 +1,12 @@
 import { MarkdownRenderChild, TFile } from "obsidian";
 import { DxfRenderer } from "../render/DxfRenderer";
 import { DxfDocument } from "../core/model/DxfDocument";
+import { AnnotationStore } from "../core/annotation/AnnotationStore";
 import { themeFromObsidian } from "../render/obsidianTheme";
 import { isBinaryDxf } from "../core/parser/tokenizer";
 import type DxfPlugin from "../main";
+
+const ANNOTATION_COLOR = 0xe0a030;
 
 /**
  * Note embed support for `![[drawing.dxf]]` (design doc §5, §11.1).
@@ -60,16 +63,21 @@ class DxfEmbedChild extends MarkdownRenderChild {
 			}
 			const text = new TextDecoder("utf-8").decode(bytes);
 			const result = await this.plugin.parseHost.parse(text);
-			const doc = new DxfDocument(
-				result.tags,
-				result.newline,
-				result.ranges,
-				result.entities,
-				result.layers,
-				result.fullyAddressable
-			);
+			const doc = DxfDocument.fromResult(result);
 			this.renderer = new DxfRenderer(canvas, themeFromObsidian(host));
 			this.renderer.loadDocument(doc);
+
+			// Show annotations from the sidecar, read-only, if present.
+			try {
+				const scp = this.file.path + ".annotations.json";
+				if (await this.plugin.app.vault.adapter.exists(scp)) {
+					const store = new AnnotationStore();
+					store.loadJSON(await this.plugin.app.vault.adapter.read(scp));
+					this.renderer.setOverlay(store.toOverlay(ANNOTATION_COLOR));
+				}
+			} catch {
+				/* ignore sidecar issues in embeds */
+			}
 		} catch (err) {
 			host.setText("Failed to render DXF: " + (err instanceof Error ? err.message : String(err)));
 		}

@@ -3,22 +3,22 @@ import { VIEW_TYPE_DXF, DXF_EXTENSIONS } from "../constants";
 import { ViewController } from "./ViewController";
 import { themeFromObsidian } from "../render/obsidianTheme";
 import { isBinaryDxf } from "../core/parser/tokenizer";
+import { promptForText } from "./TextPromptModal";
 import type DxfPlugin from "../main";
-import Toolbar from "../ui/Toolbar.svelte";
-import Sidebar from "../ui/Sidebar.svelte";
+import App from "../ui/App.svelte";
+
+const SIDECAR_SUFFIX = ".annotations.json";
 
 /**
- * File view for `.dxf` files (design doc §5). All I/O goes through the Vault
- * adapter's binary API — never Node `fs` — so the plugin works on mobile.
- * Saving is explicit (no silent autosave) which is deliberate while round-trip
- * fidelity is still being proven (§8.3).
+ * File view for `.dxf` files (design doc §5). Binary Vault I/O only (mobile
+ * safe). The drawing renders full-bleed; the Svelte UI (icon tool palette +
+ * floating cards) sits on top. Saving is explicit and writes the DXF and the
+ * annotation sidecar independently.
  */
 export class DxfFileView extends FileView {
 	private controller: ViewController | null = null;
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	private toolbar: any = null;
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	private sidebar: any = null;
+	private ui: any = null;
 
 	constructor(leaf: WorkspaceLeaf, private plugin: DxfPlugin) {
 		super(leaf);
@@ -27,17 +27,18 @@ export class DxfFileView extends FileView {
 	getViewType(): string {
 		return VIEW_TYPE_DXF;
 	}
-
 	getIcon(): string {
 		return "shapes";
 	}
-
 	getDisplayText(): string {
 		return this.file?.basename ?? "DXF";
 	}
-
 	canAcceptExtension(extension: string): boolean {
 		return DXF_EXTENSIONS.includes(extension.toLowerCase());
+	}
+
+	private sidecarPath(file: TFile): string {
+		return file.path + SIDECAR_SUFFIX;
 	}
 
 	async onLoadFile(file: TFile): Promise<void> {
@@ -48,51 +49,57 @@ export class DxfFileView extends FileView {
 		const buffer = await this.app.vault.readBinary(file);
 		const bytes = new Uint8Array(buffer);
 		if (isBinaryDxf(bytes)) {
-			this.renderError("Binary DXF files are not supported in v1 (ASCII DXF only).");
+			host.createDiv({ cls: "dxf-error", text: "Binary DXF files are not supported in v1 (ASCII DXF only)." });
 			return;
 		}
 		const text = new TextDecoder("utf-8").decode(bytes);
 
-		// Layout: toolbar on top, then a row of canvas (flex) + sidebar.
-		const toolbarEl = host.createDiv({ cls: "dxf-toolbar-slot" });
-		const bodyEl = host.createDiv({ cls: "dxf-body" });
-		const canvasEl = bodyEl.createDiv({ cls: "dxf-canvas" });
-		const sidebarEl = bodyEl.createDiv({ cls: "dxf-sidebar-slot" });
+		const canvasEl = host.createDiv({ cls: "dxf-canvas" });
+		const uiEl = host.createDiv({ cls: "dxf-ui-root" });
 
-		this.controller = new ViewController(canvasEl, themeFromObsidian(host));
+		this.controller = new ViewController(canvasEl, {
+			theme: themeFromObsidian(host),
+			promptText: (initial) => promptForText(this.app, initial, "Text"),
+		});
 
-		this.toolbar = new Toolbar({
-			target: toolbarEl,
-			props: { controller: this.controller, onSave: () => this.save() },
+		this.ui = new App({
+			target: uiEl,
+			props: { controller: this.controller, onSave: () => this.save(), nudgeStep: this.plugin.settings.nudgeStep },
 		});
-		this.sidebar = new Sidebar({
-			target: sidebarEl,
-			props: { controller: this.controller, nudgeStep: this.plugin.settings.nudgeStep },
-		});
+
+		let annotationJSON: string | null = null;
+		try {
+			const scp = this.sidecarPath(file);
+			if (await this.app.vault.adapter.exists(scp)) annotationJSON = await this.app.vault.adapter.read(scp);
+		} catch {
+			/* ignore a missing/unreadable sidecar */
+		}
 
 		try {
 			const result = await this.plugin.parseHost.parse(text);
-			this.controller.load(result);
+			this.controller.load(result, annotationJSON);
 		} catch (err) {
-			this.renderError("Failed to parse DXF: " + (err instanceof Error ? err.message : String(err)));
+			host.createDiv({ cls: "dxf-error", text: "Failed to parse DXF: " + (err instanceof Error ? err.message : String(err)) });
 			return;
 		}
 
 		this.registerDomEvent(host, "keydown", (ev) => this.onKeyDown(ev));
 		this.registerEvent(
-			this.app.workspace.on("css-change", () => {
-				this.controller?.setTheme(themeFromObsidian(this.contentEl));
-			})
+			this.app.workspace.on("css-change", () => this.controller?.setTheme(themeFromObsidian(this.contentEl)))
 		);
 	}
 
 	private onKeyDown(ev: KeyboardEvent): void {
 		if (!this.controller) return;
-		const step = this.plugin.settings.nudgeStep;
+		if (this.controller.handleKey(ev)) {
+			ev.preventDefault();
+			return;
+		}
 		const mod = ev.ctrlKey || ev.metaKey;
+		const step = this.plugin.settings.nudgeStep;
 		if (mod && ev.key.toLowerCase() === "s") {
 			ev.preventDefault();
-			this.save();
+			void this.save();
 		} else if (mod && ev.key.toLowerCase() === "z") {
 			ev.preventDefault();
 			ev.shiftKey ? this.controller.redo() : this.controller.undo();
@@ -114,30 +121,33 @@ export class DxfFileView extends FileView {
 
 	async save(): Promise<void> {
 		if (!this.controller || !this.file) return;
-		if (!this.controller.dirty) {
-			new Notice("DXF: no changes to save.");
-			return;
-		}
-		const text = this.controller.serialize();
-		if (text === null) return;
-		const bytes = new TextEncoder().encode(text);
-		const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
-		await this.app.vault.modifyBinary(this.file, buffer);
-		this.controller.markSaved();
-		new Notice("DXF saved.");
-	}
+		let saved = false;
 
-	private renderError(message: string): void {
-		const box = this.contentEl.createDiv({ cls: "dxf-error" });
-		box.setText(message);
+		if (this.controller.dxfDirty) {
+			const dxf = this.controller.serializeDxf();
+			if (dxf !== null) {
+				const bytes = new TextEncoder().encode(dxf);
+				const out = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+				await this.app.vault.modifyBinary(this.file, out);
+				this.controller.markDxfSaved();
+				saved = true;
+			}
+		}
+
+		if (this.controller.annotationsDirty) {
+			const json = this.controller.annotationsJSON(this.file.path);
+			await this.app.vault.adapter.write(this.sidecarPath(this.file), json);
+			this.controller.markAnnotationsSaved();
+			saved = true;
+		}
+
+		new Notice(saved ? "DXF saved." : "DXF: nothing to save.");
 	}
 
 	async onUnloadFile(): Promise<void> {
-		this.toolbar?.$destroy?.();
-		this.sidebar?.$destroy?.();
+		this.ui?.$destroy?.();
 		this.controller?.dispose();
-		this.toolbar = null;
-		this.sidebar = null;
+		this.ui = null;
 		this.controller = null;
 	}
 

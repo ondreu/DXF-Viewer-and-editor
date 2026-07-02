@@ -15,5 +15,21 @@ export function parseDxf(text: string): ParseResult {
 	const { entities, layers } = buildRenderModel(dxf, tags, ranges);
 	const fullyAddressable = entities.every((e) => e.id !== "" && !!ranges[e.id]);
 
-	return { tags, newline, entities, ranges, layers, fullyAddressable };
+	// Largest hex handle in the file, so new entities can allocate above it.
+	let maxHandle = 0;
+	for (const h of Object.keys(ranges)) {
+		const n = parseInt(h, 16);
+		if (!Number.isNaN(n) && n > maxHandle) maxHandle = n;
+	}
+
+	return {
+		tags,
+		newline,
+		entities,
+		ranges,
+		layers,
+		fullyAddressable,
+		entitiesEnd: section ? section.end : -1,
+		maxHandle,
+	};
 }

@@ -1,4 +1,5 @@
 import type { DxfDocument } from "../model/DxfDocument";
+import type { NewEntitySpec } from "../model/types";
 
 /**
  * A reversible edit. Commands are the *only* way the document is mutated, so
@@ -47,6 +48,22 @@ export class ChangeLayerCommand implements Command {
 	}
 	undo(doc: DxfDocument): void {
 		doc.setLayer(this.id, this.prev);
+	}
+}
+
+export class AddEntityCommand implements Command {
+	readonly label = "Draw";
+	private handle: string | null = null;
+	constructor(private readonly spec: NewEntitySpec) {}
+	do(doc: DxfDocument): void {
+		// reuse the same handle across redo so undo/redo is stable
+		this.handle = doc.addEntity(this.spec, this.handle ?? undefined);
+	}
+	undo(doc: DxfDocument): void {
+		if (this.handle) doc.removeAdded(this.handle);
+	}
+	get createdHandle(): string | null {
+		return this.handle;
 	}
 }
 

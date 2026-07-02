@@ -128,4 +128,15 @@ export interface ParseResult {
 	layers: LayerInfo[];
 	/** true when every entity carried a handle (i.e. editing is safe) */
 	fullyAddressable: boolean;
+	/** index of the ENTITIES section's ENDSEC tag (where new entities inject), or -1 */
+	entitiesEnd: number;
+	/** largest handle seen (decimal), so new entities can allocate fresh handles */
+	maxHandle: number;
 }
+
+/** Spec for a newly drawn entity (design doc §8 draw tools). */
+export type NewEntitySpec =
+	| { type: "LINE"; layer: string; colorNumber?: number; start: Point2; end: Point2 }
+	| { type: "CIRCLE"; layer: string; colorNumber?: number; center: Point2; radius: number }
+	| { type: "LWPOLYLINE"; layer: string; colorNumber?: number; vertices: Point2[]; closed: boolean }
+	| { type: "TEXT"; layer: string; colorNumber?: number; position: Point2; height: number; text: string };
