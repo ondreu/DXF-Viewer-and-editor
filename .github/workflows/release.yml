@@ -1,0 +1,49 @@
+name: Release Obsidian plugin
+
+# Triggered by pushing a version tag that matches the manifest version, e.g.
+#   git tag 0.1.0 && git push origin 0.1.0
+# BRAT installs from the resulting GitHub release, so the tag must equal the
+# `version` in manifest.json exactly (no leading "v"), and the release must
+# carry main.js, manifest.json and styles.css as assets.
+on:
+  push:
+    tags:
+      - "*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20.x"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build plugin
+        run: npm run build
+
+      - name: Verify tag matches manifest version
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+          manifest_version="$(node -p "require('./manifest.json').version")"
+          if [ "$tag" != "$manifest_version" ]; then
+            echo "Tag ($tag) does not match manifest version ($manifest_version)." >&2
+            exit 1
+          fi
+
+      - name: Create GitHub release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+          gh release create "$tag" \
+            --title="$tag" \
+            --notes="Automated release for $tag. Install via BRAT using this repository." \
+            main.js manifest.json styles.css versions.json
