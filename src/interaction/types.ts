@@ -94,8 +94,10 @@ export interface Tool {
 	readonly panWithLeftDrag: boolean;
 	activate?(): void;
 	deactivate?(): void;
-	/** return true on a "down" press the tool consumes (e.g. grabbed a grip) */
-	pointer(phase: "down" | "move" | "up" | "click", world: Point2, ev: PointerEvent): boolean | void;
+	/** return true on a "down" press the tool consumes (e.g. grabbed a grip).
+	 * "cancel" fires when the browser aborts the gesture (pointercancel) instead
+	 * of a normal "up" — tools with multi-event drag state should drop it. */
+	pointer(phase: "down" | "move" | "up" | "click" | "cancel", world: Point2, ev: PointerEvent): boolean | void;
 	/** return true if the key was handled */
 	key?(ev: KeyboardEvent): boolean;
 	/** short hint shown in the UI */

@@ -190,6 +190,15 @@ export class SelectTool implements Tool {
 		if (phase === "down") return this.onDown(world, ev);
 		if (phase === "move") return this.onMove(world, ev);
 		if (phase === "up") return this.onUp(world);
+		if (phase === "cancel") {
+			// Browser aborted the gesture (pointercancel) instead of a normal "up" —
+			// drop any in-progress drag/box-select rather than leave it stale for
+			// the next unrelated press to pick up.
+			this.drag = null;
+			this.box = null;
+			this.ctx.setOverlay([]);
+			return;
+		}
 		if (phase === "click") {
 			const id = this.ctx.pick(world);
 			if (ev && (ev.ctrlKey || ev.metaKey)) this.ctx.toggleSelection(id);
@@ -211,6 +220,15 @@ export class SelectTool implements Tool {
 	private onDown(world: Point2, ev?: PointerEvent): boolean {
 		const doc = this.ctx.doc();
 		if (!doc) return false;
+
+		// A fresh "down" should never arrive while a previous drag/box is still
+		// open — a normal single-pointer gesture always closes its own drag/box
+		// via onUp first. If one is still set here, an earlier gesture was
+		// interrupted without a clean "up" (e.g. a second pointer's cancelled
+		// pointerup got swallowed by the renderer's shared panning flag); drop
+		// the stale state rather than let it corrupt this new interaction.
+		this.drag = null;
+		this.box = null;
 
 		// 1. grab a note annotation?
 		const annoId = this.ctx.annotationAt(world);

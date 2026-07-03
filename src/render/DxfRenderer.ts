@@ -34,7 +34,7 @@ export type RendererEvents = {
 	viewchange: void;
 };
 
-export type PointerPhase = "down" | "move" | "up" | "click";
+export type PointerPhase = "down" | "move" | "up" | "click" | "cancel";
 export interface ToolPointerHandler {
 	/** for phase "down" in pan mode, return true to consume (e.g. grabbed a grip) */
 	(phase: PointerPhase, world: Point2, ev: PointerEvent): boolean | void;
@@ -729,6 +729,12 @@ export class DxfRenderer {
 		el.addEventListener("pointercancel", (ev) => {
 			touchPoints.delete(ev.pointerId);
 			if (touchPoints.size < 2) pinching = false;
+			// The browser is aborting this gesture (OS/native drag interruption,
+			// focus loss, ...) rather than delivering a normal pointerup. If a tool
+			// was mid-gesture (not just the renderer's own pan), let it know so it
+			// can drop any in-progress drag/box-select state instead of leaving it
+			// stale for the next unrelated interaction to trip over.
+			if (!panning) this.emitTool("cancel", ev);
 			panning = false;
 			leftMaybeClick = false;
 		});
