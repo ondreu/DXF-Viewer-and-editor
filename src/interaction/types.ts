@@ -7,21 +7,47 @@ import type { Annotation } from "../core/annotation/types";
 
 export type ToolId =
 	| "select"
+	| "select-similar"
 	| "measure-distance"
 	| "measure-radius"
 	| "measure-angle"
+	| "measure-area"
+	| "measure-point"
 	| "draw-line"
 	| "draw-circle"
+	| "draw-circle-2p"
+	| "draw-circle-3p"
 	| "draw-arc"
+	| "draw-arc-3p"
+	| "draw-ellipse"
 	| "draw-polyline"
+	| "draw-rectangle"
+	| "draw-polygon"
 	| "draw-text"
 	| "rotate"
+	| "scale"
+	| "mirror"
+	| "copy"
+	| "fillet"
+	| "chamfer"
+	| "trim"
+	| "extend"
+	| "offset"
+	| "array-rect"
+	| "array-polar"
+	| "match-props"
+	| "join"
+	| "break"
+	| "explode"
+	| "dimension-linear"
 	| "annotate";
 
 export type Measurement =
 	| { kind: "distance"; length: number; dx: number; dy: number; angleDeg: number }
 	| { kind: "radius"; radius: number; diameter: number; circumference: number }
-	| { kind: "angle"; angleDeg: number };
+	| { kind: "angle"; angleDeg: number }
+	| { kind: "area"; area: number; perimeter: number }
+	| { kind: "point"; x: number; y: number };
 
 /** Everything a tool needs, so tools never touch three.js or Obsidian directly. */
 export interface ToolContext {
@@ -32,6 +58,8 @@ export interface ToolContext {
 	pick(world: Point2): string | null;
 	execute(cmd: Command): void;
 	select(id: string | null): void;
+	/** replace the whole selection set at once (e.g. "select similar") */
+	selectMany(ids: string[]): void;
 	/** ctrl/cmd+click: add or remove an entity from the selection set */
 	toggleSelection(id: string | null): void;
 	/** currently selected entity handle, if any (for grip editing) */
@@ -46,7 +74,7 @@ export interface ToolContext {
 	/** publish a live/final measurement to the UI (null clears); points feed "save as annotation" */
 	reportMeasurement(m: Measurement | null, points?: Point2[]): void;
 	addAnnotation(a: Annotation): void;
-	promptText(initial: string): Promise<string | null>;
+	promptText(initial: string, title?: string): Promise<string | null>;
 	activeLayer(): string;
 	/** active ACI colour, or null for BYLAYER */
 	activeColor(): number | null;

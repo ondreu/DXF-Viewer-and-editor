@@ -1,6 +1,7 @@
 <script lang="ts">
 	import Card from "./Card.svelte";
 	import { icon } from "./actions";
+	import { entityLength } from "../core/geom/geometry2d";
 	import type { ViewController, ControllerState } from "../view/ViewController";
 
 	export let controller: ViewController;
@@ -35,16 +36,17 @@
 	function setText(e: Event) {
 		controller.setSelectedProps({ text: (e.target as HTMLInputElement).value });
 	}
-	function lineLen(en: typeof entity): number {
-		if (en && en.type === "LINE") return Math.hypot(en.end.x - en.start.x, en.end.y - en.start.y);
-		return 0;
-	}
 </script>
 
 {#if entity}
 	<Card title={multi ? `${state.selectionCount} selected` : "Properties"} anchor="anchor-tr" onClose={() => controller.clearSelection()}>
 		{#if multi}
 			<div class="dxf-note" style="margin-top:0">Editing applies to all {state.selectionCount} selected entities.</div>
+		{/if}
+		{#if multi && state.selectionLength > 0}
+			<div class="dxf-kv" style="margin-bottom:6px">
+				<span class="dxf-k">Total length</span><span class="dxf-v dxf-mono">{state.selectionLength.toFixed(4)}</span>
+			</div>
 		{/if}
 		<div class="dxf-kv">
 			<span class="dxf-k">Type</span><span class="dxf-v">{entity.type}</span>
@@ -86,8 +88,8 @@
 					<span class="dxf-k">Y</span>
 					<span class="dxf-v"><input class="dxf-num" type="number" step="any" value={anchor.y} on:change={(e) => setAnchor("y", e)} /></span>
 				{/if}
-				{#if entity.type === "LINE"}
-					<span class="dxf-k">Length</span><span class="dxf-v dxf-mono">{lineLen(entity).toFixed(4)}</span>
+				{#if entity.type === "LINE" || entity.type === "ARC" || entity.type === "CIRCLE" || entity.type === "LWPOLYLINE"}
+					<span class="dxf-k">Length</span><span class="dxf-v dxf-mono">{entityLength(entity).toFixed(4)}</span>
 				{/if}
 				{#if entity.type === "CIRCLE" || entity.type === "ARC"}
 					<span class="dxf-k">Radius</span>

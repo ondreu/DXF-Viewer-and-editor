@@ -127,11 +127,24 @@ export class DxfDocument {
 
 	// -- layer visibility -----------------------------------------------------
 
+	/** Transient, non-persisted view state: when set, only these layers render/pick/snap
+	 * (a "layer isolate" toggle). Never touches saved layer visibility or the undo stack. */
+	private isolated: Set<string> | null = null;
+
+	setIsolatedLayers(names: string[] | null): void {
+		this.isolated = names ? new Set(names) : null;
+	}
+
+	get isIsolating(): boolean {
+		return this.isolated !== null;
+	}
+
 	isLayerFrozen(name: string): boolean {
 		return this.layerByName.get(name)?.frozen === true;
 	}
 
 	isLayerVisible(name: string): boolean {
+		if (this.isolated && !this.isolated.has(name)) return false;
 		const l = this.layerByName.get(name);
 		if (!l) return true;
 		return l.visible !== false && l.frozen !== true;
@@ -198,6 +211,9 @@ export class DxfDocument {
 				break;
 			case "TEXT":
 				e = { id: h, type: "TEXT", layer: spec.layer, color, colorNumber: spec.colorNumber, position: { ...spec.position }, height: spec.height, rotation: spec.rotation ?? 0, text: spec.text };
+				break;
+			case "ELLIPSE":
+				e = { id: h, type: "ELLIPSE", layer: spec.layer, color, colorNumber: spec.colorNumber, center: { ...spec.center }, majorAxisEndpoint: { ...spec.majorAxisEndpoint }, ratio: spec.ratio, startAngle: spec.startAngle ?? 0, endAngle: spec.endAngle ?? 360 };
 				break;
 		}
 		this.entities.push(e);
@@ -336,6 +352,54 @@ export class DxfDocument {
 		}
 	}
 
+	/** Scale an entity by `factor` about (cx, cy); also scales radius/text height. */
+	scale(id: string, cx: number, cy: number, factor: number): void {
+		const e = this.byId.get(id);
+		if (!e || !(factor > 0)) return;
+		for (const idx of vertexIndices(e)) {
+			const pt = vertexOf(e, idx);
+			if (!pt) continue;
+			const nx = cx + (pt.x - cx) * factor;
+			const ny = cy + (pt.y - cy) * factor;
+			this.moveVertex(id, idx, nx - pt.x, ny - pt.y);
+		}
+		if (e.type === "CIRCLE" || e.type === "ARC") {
+			this.setProps(id, { radius: e.radius * factor });
+		} else if (e.type === "TEXT" || e.type === "MTEXT") {
+			this.setProps(id, { height: e.height * factor });
+		}
+	}
+
+	/** Mirror an entity across the line through (ax, ay)-(bx, by). */
+	mirror(id: string, ax: number, ay: number, bx: number, by: number): void {
+		const e = this.byId.get(id);
+		if (!e) return;
+		const lx = bx - ax, ly = by - ay;
+		const len2 = lx * lx + ly * ly;
+		if (len2 < 1e-12) return;
+		const reflect = (p: Point2): { dx: number; dy: number } => {
+			const vx = p.x - ax, vy = p.y - ay;
+			const t = (vx * lx + vy * ly) / len2;
+			const fx = ax + t * lx, fy = ay + t * ly;
+			const nx = 2 * fx - p.x, ny = 2 * fy - p.y;
+			return { dx: nx - p.x, dy: ny - p.y };
+		};
+		for (const idx of vertexIndices(e)) {
+			const pt = vertexOf(e, idx);
+			if (!pt) continue;
+			const { dx, dy } = reflect(pt);
+			this.moveVertex(id, idx, dx, dy);
+		}
+		if (e.type === "ARC") {
+			// Reflecting reverses the sweep direction, so the new CCW start/end
+			// are the mirrored *directions* of the old end/start respectively.
+			const theta = (Math.atan2(ly, lx) * 180) / Math.PI;
+			const newStart = norm360(2 * theta - e.endAngle);
+			const newEnd = norm360(2 * theta - e.startAngle);
+			this.setProps(id, { startAngle: newStart, endAngle: newEnd });
+		}
+	}
+
 	/** Anchor point used to attach annotations to an entity. */
 	anchorOf(id: string): Point2 | null {
 		const e = this.byId.get(id);
@@ -345,6 +409,7 @@ export class DxfDocument {
 				return { x: (e.start.x + e.end.x) / 2, y: (e.start.y + e.end.y) / 2 };
 			case "CIRCLE":
 			case "ARC":
+			case "ELLIPSE":
 				return { ...e.center };
 			case "LWPOLYLINE":
 			case "POLYLINE":
@@ -483,7 +548,7 @@ export class DxfDocument {
 			if (s.offsetX === 0 && s.offsetY === 0 && s.layer === undefined && s.color === undefined && !hasVertexEdit && !hasCodeEdit) continue;
 			const range = this.ranges[id];
 			if (!range) continue;
-			edits.set(id, this.patchTags(range, s));
+			edits.set(id, this.patchTags(range, s, id));
 		}
 		return edits;
 	}
@@ -500,11 +565,16 @@ export class DxfDocument {
 		return out;
 	}
 
-	private patchTags(range: TagRange, s: EditState): DxfTag[] {
+	private patchTags(range: TagRange, s: EditState, id: string): DxfTag[] {
 		const out: DxfTag[] = [];
 		let colorApplied = false;
 		let layerTagIndex = -1;
 		const appliedCodes = new Set<number>();
+		// ELLIPSE stores its major-axis endpoint (group 11/21, pair 1) as a vector
+		// *relative* to the centre, not an absolute point — so a whole-entity
+		// translate (offsetX/offsetY) must not shift it; only an explicit
+		// per-vertex edit (rotate/scale/mirror/grip, via pointOffsets) should.
+		const isEllipse = this.byId.get(id)?.type === "ELLIPSE";
 		// Track the coordinate-pair ordinal so per-vertex offsets hit the right
 		// point (X code opens a new pair; the matching Y code reuses it).
 		let pair = -1;
@@ -514,10 +584,12 @@ export class DxfDocument {
 			if (t.code >= 10 && t.code <= 19) {
 				pair++;
 				const vo = s.pointOffsets?.get(pair)?.dx ?? 0;
-				if (s.offsetX !== 0 || vo !== 0) value = fmtReal(parseFloat(t.value) + s.offsetX + vo);
+				const whole = isEllipse && pair === 1 ? 0 : s.offsetX;
+				if (whole !== 0 || vo !== 0) value = fmtReal(parseFloat(t.value) + whole + vo);
 			} else if (t.code >= 20 && t.code <= 29) {
 				const vo = s.pointOffsets?.get(pair)?.dy ?? 0;
-				if (s.offsetY !== 0 || vo !== 0) value = fmtReal(parseFloat(t.value) + s.offsetY + vo);
+				const whole = isEllipse && pair === 1 ? 0 : s.offsetY;
+				if (whole !== 0 || vo !== 0) value = fmtReal(parseFloat(t.value) + whole + vo);
 			} else if (s.codeOverrides?.has(t.code) && !appliedCodes.has(t.code)) {
 				value = s.codeOverrides.get(t.code)!;
 				appliedCodes.add(t.code);
@@ -645,6 +717,8 @@ function vertexOf(e: RenderEntity, pairIndex: number): Point2 | null {
 		case "CIRCLE":
 		case "ARC":
 			return pairIndex === 0 ? e.center : null;
+		case "ELLIPSE":
+			return pairIndex === 0 ? e.center : pairIndex === 1 ? e.majorAxisEndpoint : null;
 		case "TEXT":
 		case "MTEXT":
 			return pairIndex === 0 ? e.position : null;
@@ -657,6 +731,7 @@ function vertexOf(e: RenderEntity, pairIndex: number): Point2 | null {
 function vertexIndices(e: RenderEntity): number[] {
 	switch (e.type) {
 		case "LINE":
+		case "ELLIPSE":
 			return [0, 1];
 		case "LWPOLYLINE":
 		case "POLYLINE":
@@ -688,6 +763,10 @@ function translate(e: RenderEntity, dx: number, dy: number): void {
 		case "CIRCLE":
 		case "ARC":
 			p(e.center);
+			break;
+		case "ELLIPSE":
+			p(e.center);
+			p(e.majorAxisEndpoint);
 			break;
 		case "LWPOLYLINE":
 		case "POLYLINE":

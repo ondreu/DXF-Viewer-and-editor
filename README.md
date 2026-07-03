@@ -26,16 +26,48 @@ This is **v1: DXF only**. DWG is intentionally out of scope (see
 - **Measure** — distance (with Δx/Δy and angle), radius/diameter/circumference,
   and three-point angle, shown in a floating readout. Measurements can be saved
   as visible annotations.
-- **Draw** — line, circle, **arc**, polyline and text. Drawn geometry becomes
-  **real DXF entities** written back to the file on save.
-- **Editing** — move, rotate, delete, and change the layer/colour of `LINE`,
-  `CIRCLE`, `ARC`, `LWPOLYLINE` and `TEXT` entities, with undo/redo.
+- **Draw** — line, circle (centre+radius, 2-point or 3-point), arc
+  (centre+start+end or 3-point), ellipse, polyline, rectangle and regular
+  polygon (any side count), plus text. Drawn geometry becomes **real DXF
+  entities** written back to the file on save.
+- **Editing** — move, copy, rotate, scale, mirror, delete, and change the
+  layer/colour of `LINE`, `CIRCLE`, `ARC`, `ELLIPSE`, `LWPOLYLINE` and `TEXT`
+  entities, with undo/redo.
 - **Multi-select** — `Ctrl`/`Cmd`+click to add entities to the selection; move,
-  rotate, delete or recolour them all at once.
+  copy, rotate, scale, mirror, delete or recolour them all at once. A
+  **select-similar** tool picks every entity sharing the clicked one's type and
+  layer; a **layer isolate** toggle hides everything else (purely a view
+  state — never touches the saved file or the undo stack).
 - **Precise properties** — edit exact position (X/Y), radius, arc start/end
-  angles, and text height/rotation/content from the Properties card.
-- **Rotation** — a rotate tool (pick a pivot, spin), plus 90° quick-rotate
-  buttons, working on single entities or a whole multi-selection.
+  angles, and text height/rotation/content from the Properties card. Selecting
+  multiple entities shows their combined length.
+- **Transform tools** — rotate (pick a pivot, spin) with 90° quick-rotate
+  buttons, scale (pivot + drag factor), mirror (pick a mirror line) and copy
+  (base point + destination), working on single entities or a whole
+  multi-selection.
+- **Corner tools** — fillet (round a corner between two lines with a tangent
+  arc) and chamfer (bevel it with a straight cut), both prompting for the
+  radius/distance and trimming the two lines automatically.
+- **Trim / extend** — click a cutting edge (line, circle, arc or polyline),
+  then click a line or arc to trim it back to that edge, or a line to stretch
+  it out to a boundary.
+- **Offset** — click a line, circle or arc, then click a side/distance for a
+  parallel copy on the same layer.
+- **Join / break / explode** — merge a connected chain of LINEs into one
+  polyline, split a LINE/ARC at a clicked point, or explode a polyline back
+  into individual line segments.
+- **Arrays** — rectangular (columns/rows/spacing) and polar (count + angle
+  about a picked centre), both as one grouped undo step.
+- **Match properties** — an eyedropper that copies a source entity's
+  layer/colour onto others you click.
+- **Measure** — distance (with Δx/Δy and angle), radius/diameter/circumference,
+  three-point angle, area/perimeter of a circle or closed polyline, and a
+  coordinate readout (ID point), shown in a floating readout. Measurements can
+  be saved as visible annotations.
+- **Linear dimension** — click the two points to measure, then place the
+  dimension line; builds a real extension-line/arrow/text group (plain
+  `LINE`/`LWPOLYLINE`/`TEXT` entities, not a parametric DXF `DIMENSION`) so it
+  renders identically everywhere and stays editable with the ordinary tools.
 - **Layer management** — add layers and set their colour, linetype and
   lineweight; **hide/show** and **freeze/thaw** layers. Edits are written back
   into the DXF `LAYER` table on save.
@@ -46,18 +78,25 @@ This is **v1: DXF only**. DWG is intentionally out of scope (see
   nested/array block INSERTs are transformed to world coordinates, so holes and
   sub-parts land where AutoCAD puts them.
 - **Non-destructive saves** — anything the editor doesn't understand (whole
-  entity types like `HATCH`, `SPLINE`, `DIMENSION`, …) is preserved on save and
-  shown as an *unsupported* placeholder, never silently discarded.
-- **Icon tool palette + floating cards** — a left-hand tool palette and
-  draggable, collapsible cards (properties, measurement, layers, annotations)
-  instead of a fixed sidebar. All styled from Obsidian's own theme variables.
+  entity types like `HATCH`, `SPLINE`, real `DIMENSION`, …) is preserved on
+  save and shown as an *unsupported* placeholder, never silently discarded.
+- **Ribbon toolbar + floating cards** — a tabbed ribbon (Select / Measure /
+  Draw / Modify / Arrange / Annotate) groups the tool palette instead of one
+  long strip, alongside draggable, collapsible cards (properties, measurement,
+  layers, annotations). All styled from Obsidian's own theme variables.
 
 ### Interface
 
-- **Left palette**: select · measure (distance / radius / angle) · draw (line /
-  circle / arc / polyline / text) · rotate · note.
+- **Ribbon** (top-left, tabbed): **Select** (select, select-similar) ·
+  **Measure** (distance / radius / angle / area / point) · **Draw** (line /
+  circle [centre-radius, 2-point, 3-point] / arc [centre-based, 3-point] /
+  ellipse / polyline / rectangle / polygon / text) · **Modify** (copy / rotate
+  / scale / mirror / fillet / chamfer / trim / extend / offset / join / break
+  / explode) · **Arrange** (rectangular array / polar array / match
+  properties) · **Annotate** (linear dimension / note).
 - **Top bar**: fit · grid toggle · snap toggle · screenshot · undo · redo ·
-  layers · annotations · save (a dot marks unsaved changes).
+  delete selection · layer isolate · layers · annotations · save (a dot marks
+  unsaved changes).
 - **Keyboard**: `Esc` cancels the current tool operation, `Enter` finishes a
   polyline (`C` closes it), arrow keys nudge a selection, `Delete` removes it,
   `Ctrl/Cmd+S` saves, `Ctrl/Cmd+Z` / `Shift+Ctrl/Cmd+Z` undo/redo. `Ctrl`/`Cmd`
@@ -67,9 +106,13 @@ This is **v1: DXF only**. DWG is intentionally out of scope (see
 
 | Entity | View | Edit |
 |---|---|---|
-| LINE, CIRCLE, ARC, LWPOLYLINE, TEXT | ✅ | ✅ (move / rotate / delete / layer / colour / dimensions) |
+| LINE, CIRCLE, ARC, ELLIPSE, LWPOLYLINE, TEXT | ✅ | ✅ (move / rotate / scale / mirror / delete / layer / colour / dimensions) |
 | POLYLINE, MTEXT, INSERT (flattened blocks) | ✅ | — |
 | Everything else | placeholder marker | preserved on save |
+
+`ELLIPSE` editing covers full ellipses (the common case); a partial
+elliptical-arc's trim isn't preserved correctly under **mirror** specifically
+(everything else — move/rotate/scale, and mirroring a full ellipse — is exact).
 
 Editing requires an entity to carry a DXF handle (group code 5). Files without
 handles remain fully viewable but are read-only.
@@ -85,14 +128,16 @@ src/
   core/           framework-agnostic: no Obsidian, no Svelte, no three.js
     parser/       raw DXF tokenizer, dxf-parser wrapper, OCS transforms
     model/        DxfDocument, entity types, ACI colours, raw passthrough store
-    command/      reversible command stack (move/delete/layer/colour/draw)
+    command/      reversible command stack (move/delete/layer/colour/draw/batch)
     serializer/   patches edited entities + injects newly drawn ones
     annotation/   sidecar annotation store (notes / measurements / markup)
+    geom/         pure 2D geometry (intersections, fillet/chamfer, ellipse
+                  sampling, dimension layout) — independently unit-tested
   render/         three.js 2D renderer (grid, overlay, pan/zoom/pick)
-  interaction/    snap engine, tool manager, select/measure/draw/annotate tools
+  interaction/    snap engine, tool manager, select/measure/draw/edit tools
   worker/         Web Worker host + inlined parse worker (design doc §6)
   view/           Obsidian file view, note embed, view controller bridge
-  ui/             Svelte UI shell (tool palette + floating cards)
+  ui/             Svelte UI shell (tabbed ribbon + floating cards)
   settings/       Obsidian Setting-API settings tab
 ```
 

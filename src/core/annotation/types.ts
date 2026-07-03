@@ -17,7 +17,17 @@ export interface AngleMeasure {
 	kind: "angle";
 	angleDeg: number;
 }
-export type MeasureData = DistanceMeasure | RadiusMeasure | AngleMeasure;
+export interface AreaMeasure {
+	kind: "area";
+	area: number;
+	perimeter: number;
+}
+export interface PointMeasure {
+	kind: "point";
+	x: number;
+	y: number;
+}
+export type MeasureData = DistanceMeasure | RadiusMeasure | AngleMeasure | AreaMeasure | PointMeasure;
 
 /** Markup that lives *outside* the DXF, in a sidecar JSON (design doc / #4). */
 export type Annotation =

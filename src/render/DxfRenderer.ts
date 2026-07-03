@@ -24,6 +24,7 @@ import { EventEmitter } from "../core/events/EventEmitter";
 import { DEFAULT_THEME, type RenderTheme } from "./theme";
 import { pickEntity } from "./picking";
 import type { Overlay, OverlayPrim } from "./overlay";
+import { ellipsePoints } from "../core/geom/geometry2d";
 
 export type RendererEvents = {
 	select: { id: string | null };
@@ -238,6 +239,8 @@ export class DxfRenderer {
 				return this.arcObject(e.center, e.radius, 0, 360, color, true);
 			case "ARC":
 				return this.arcObject(e.center, e.radius, e.startAngle, e.endAngle, color, false);
+			case "ELLIPSE":
+				return this.ellipseObject(e.center, e.majorAxisEndpoint, e.ratio, e.startAngle, e.endAngle, color);
 			case "TEXT":
 			case "MTEXT":
 				return this.textObject(e.text, e.position, e.height || 1, e.rotation || 0, color);
@@ -273,6 +276,16 @@ export class DxfRenderer {
 			const a = start + (sweep * i) / ARC_STEPS;
 			arr.push(c.x + r * Math.cos(a), c.y + r * Math.sin(a), 0);
 		}
+		const geom = new BufferGeometry().setAttribute("position", new Float32BufferAttribute(arr, 3));
+		const mat = new LineBasicMaterial({ color });
+		return closed ? new LineLoop(geom, mat) : new Line(geom, mat);
+	}
+
+	private ellipseObject(center: Point2, majorAxisEndpoint: Point2, ratio: number, startDeg: number, endDeg: number, color: number): Object3D {
+		const pts = ellipsePoints(center, majorAxisEndpoint, ratio, startDeg, endDeg, ARC_STEPS);
+		const closed = Math.abs(((endDeg - startDeg) % 360 + 360) % 360) < 1e-6;
+		const arr: number[] = [];
+		for (const p of pts) arr.push(p.x, p.y, 0);
 		const geom = new BufferGeometry().setAttribute("position", new Float32BufferAttribute(arr, 3));
 		const mat = new LineBasicMaterial({ color });
 		return closed ? new LineLoop(geom, mat) : new Line(geom, mat);
@@ -657,6 +670,14 @@ export class DxfRenderer {
 					acc({ x: e.center.x - e.radius, y: e.center.y - e.radius });
 					acc({ x: e.center.x + e.radius, y: e.center.y + e.radius });
 					break;
+				case "ELLIPSE": {
+					// Loose but always-correct bound: a square of the major radius
+					// (>= minor radius) centred on the ellipse, regardless of rotation.
+					const r = Math.hypot(e.majorAxisEndpoint.x - e.center.x, e.majorAxisEndpoint.y - e.center.y);
+					acc({ x: e.center.x - r, y: e.center.y - r });
+					acc({ x: e.center.x + r, y: e.center.y + r });
+					break;
+				}
 				case "LWPOLYLINE":
 				case "POLYLINE": e.vertices.forEach(acc); break;
 				case "TEXT":

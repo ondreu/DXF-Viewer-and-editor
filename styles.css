@@ -82,27 +82,53 @@
 	background: var(--color-orange, #e0a030);
 }
 
-/* -- tool palette (left) --------------------------------------------------- */
-.dxf-ui-left {
+/* -- tool ribbon (top-left) ------------------------------------------------- */
+.dxf-ribbon {
 	position: absolute;
 	left: 10px;
-	top: 50%;
-	transform: translateY(-50%);
-}
-.dxf-palette {
+	top: 10px;
+	max-width: calc(100% - 300px);
 	display: flex;
 	flex-direction: column;
-	gap: 2px;
-	padding: 4px;
+	min-width: 0;
 	background: var(--background-secondary);
 	border: 1px solid var(--background-modifier-border);
 	border-radius: var(--radius-m);
 	box-shadow: var(--shadow-s);
+	pointer-events: auto;
 }
-.dxf-palette-sep {
-	height: 1px;
-	margin: 3px 4px;
-	background: var(--background-modifier-border);
+.dxf-ribbon-tabs {
+	display: flex;
+	gap: 2px;
+	padding: 3px 4px 0;
+	border-bottom: 1px solid var(--background-modifier-border);
+	min-width: 0;
+	overflow-x: auto;
+}
+.dxf-ribbon-tab {
+	border: none;
+	background: transparent;
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	padding: 4px 8px;
+	border-radius: var(--radius-s) var(--radius-s) 0 0;
+	cursor: pointer;
+}
+.dxf-ribbon-tab:hover {
+	color: var(--text-normal);
+	background: var(--background-modifier-hover);
+}
+.dxf-ribbon-tab.is-active {
+	color: var(--text-accent);
+	background: var(--background-modifier-active-hover, var(--background-modifier-hover));
+	box-shadow: inset 0 -2px 0 var(--text-accent);
+}
+.dxf-ribbon-items {
+	display: flex;
+	gap: 2px;
+	padding: 4px;
+	min-width: 0;
+	overflow-x: auto;
 }
 
 /* -- top action cluster ---------------------------------------------------- */
@@ -139,8 +165,8 @@
 }
 .anchor-tr { top: 52px; right: 10px; }
 .anchor-tr-2 { top: 52px; right: 252px; }
-.anchor-tl-2 { top: 52px; left: 56px; }
-.anchor-bl { left: 56px; bottom: 34px; }
+.anchor-tl-2 { top: 88px; left: 10px; }
+.anchor-bl { left: 10px; bottom: 34px; }
 
 .dxf-card-head {
 	display: flex;

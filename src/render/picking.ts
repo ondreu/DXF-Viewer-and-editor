@@ -1,4 +1,5 @@
 import type { RenderEntity, Point2 } from "../core/model/types";
+import { ellipsePoints } from "../core/geom/geometry2d";
 
 function distToSegment(p: Point2, a: Point2, b: Point2): number {
 	const dx = b.x - a.x;
@@ -20,6 +21,12 @@ export function distanceToEntity(p: Point2, e: RenderEntity): number {
 		case "ARC": {
 			const d = Math.abs(Math.hypot(p.x - e.center.x, p.y - e.center.y) - e.radius);
 			return d;
+		}
+		case "ELLIPSE": {
+			const pts = ellipsePoints(e.center, e.majorAxisEndpoint, e.ratio, e.startAngle, e.endAngle, 48);
+			let min = Infinity;
+			for (let i = 0; i < pts.length - 1; i++) min = Math.min(min, distToSegment(p, pts[i], pts[i + 1]));
+			return min;
 		}
 		case "LWPOLYLINE":
 		case "POLYLINE": {
