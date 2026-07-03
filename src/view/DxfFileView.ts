@@ -10,8 +10,7 @@ import App from "../ui/App.svelte";
 /**
  * File view for `.dxf` files (design doc §5). Binary Vault I/O only (mobile
  * safe). The drawing renders full-bleed; the Svelte UI (icon tool palette +
- * floating cards) sits on top. Saving is explicit and writes the DXF and the
- * annotation sidecar independently.
+ * floating cards) sits on top. Saving is explicit and writes the DXF back out.
  */
 export class DxfFileView extends FileView {
 	private controller: ViewController | null = null;

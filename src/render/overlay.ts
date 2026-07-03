@@ -13,7 +13,7 @@ export type OverlayPrim =
 	| { kind: "circle"; center: Point2; radius: number; color?: number; dashed?: boolean }
 	| { kind: "marker"; at: Point2; style: MarkerStyle; color?: number; sizePx?: number }
 	| { kind: "label"; at: Point2; text: string; color?: number; background?: number }
-	/** filled closed region (hatch preview / saved fill annotations) */
+	/** filled closed region (fill/hatch tool preview) */
 	| { kind: "polygon"; pts: Point2[]; color?: number; opacity?: number }
 	/** rubber-band selection box: "window" (solid, left-to-right drag) selects
 	 * only fully-enclosed entities, "crossing" (dashed, right-to-left drag)

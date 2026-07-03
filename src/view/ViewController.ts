@@ -57,9 +57,9 @@ export interface ViewControllerOptions {
 
 /**
  * The single bridge the Svelte UI talks to. Owns the renderer, document model,
- * command stack, snap settings, tool manager and annotation store, and exposes
- * a flat reactive state. The rendering/interaction layers below it never import
- * Svelte (design doc §3).
+ * command stack, snap settings and tool manager, and exposes a flat reactive
+ * state. The rendering/interaction layers below it never import Svelte
+ * (design doc §3).
  */
 export class ViewController {
 	readonly events = new EventEmitter<ControllerEvents>();

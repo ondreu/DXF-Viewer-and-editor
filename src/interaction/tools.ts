@@ -515,7 +515,7 @@ export class MeasureDistanceTool implements Tool {
 				const [a, b] = this.pts;
 				const dx = b.x - a.x, dy = b.y - a.y;
 				this.ctx.reportMeasurement({ kind: "distance", length: Math.hypot(dx, dy), dx, dy, angleDeg: norm360((Math.atan2(dy, dx) * 180) / Math.PI) });
-				// keep the measured segment on screen (and available to "save as annotation")
+				// keep the measured segment on screen until the next measurement/tool switch
 				this.ctx.setOverlay([
 					{ kind: "line", pts: [a, b], color: this.ctx.accent, dashed: true },
 					{ kind: "marker", at: a, style: "x", color: this.ctx.accent, sizePx: 4 },
