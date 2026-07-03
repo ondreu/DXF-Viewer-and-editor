@@ -14,6 +14,9 @@ This is **v1: DXF only**. DWG is intentionally out of scope (see
 
 - **File view** — click any `.dxf` in the file explorer to open it in a tab,
   the same way the built-in PDF viewer works.
+- **New drawing** — right-click a folder (or any file) in the file explorer and
+  choose **New DXF drawing** to create an empty `.dxf` and open it straight in
+  the editor; also available as the *Create new DXF drawing* command.
 - **Note embeds** — `![[drawing.dxf]]` renders a read-only viewer inline.
 - **Pan / zoom / select** — drag to pan, wheel to zoom, click to select; a
   middle/right-drag always pans, even while a tool is active.
