@@ -18,6 +18,7 @@ import {
 	ellipsePoints,
 	isFullEllipseSweep,
 	buildLinearDimension,
+	hatchLines,
 } from "../src/core/geom/geometry2d";
 import type { LineEntity, CircleEntity, ArcEntity, PolylineEntity, EllipseEntity } from "../src/core/model/types";
 
@@ -318,5 +319,66 @@ describe("buildLinearDimension", () => {
 
 	it("returns null for coincident points", () => {
 		expect(buildLinearDimension({ x: 1, y: 1 }, { x: 1, y: 1 }, { x: 2, y: 2 }, 1, 1)).toBeNull();
+	});
+});
+
+describe("hatchLines", () => {
+	const square: Array<{ x: number; y: number }> = [
+		{ x: 0, y: 0 },
+		{ x: 10, y: 0 },
+		{ x: 10, y: 10 },
+		{ x: 0, y: 10 },
+	];
+
+	it("fills a 10x10 square with horizontal lines spaced 2 apart, each spanning the full width", () => {
+		const lines = hatchLines(square, 0, 2);
+		expect(lines.length).toBeGreaterThan(0);
+		for (const [a, b] of lines) {
+			expect(a.y).toBeCloseTo(b.y, 6);
+			expect(a.y).toBeGreaterThanOrEqual(-1e-6);
+			expect(a.y).toBeLessThanOrEqual(10 + 1e-6);
+			const lo = Math.min(a.x, b.x), hi = Math.max(a.x, b.x);
+			expect(lo).toBeCloseTo(0, 6);
+			expect(hi).toBeCloseTo(10, 6);
+		}
+	});
+
+	it("every generated segment lies inside the square's bounding box for a 45deg angle too", () => {
+		const lines = hatchLines(square, 45, 3);
+		expect(lines.length).toBeGreaterThan(0);
+		for (const [a, b] of lines) {
+			for (const p of [a, b]) {
+				expect(p.x).toBeGreaterThanOrEqual(-1e-6);
+				expect(p.x).toBeLessThanOrEqual(10 + 1e-6);
+				expect(p.y).toBeGreaterThanOrEqual(-1e-6);
+				expect(p.y).toBeLessThanOrEqual(10 + 1e-6);
+			}
+		}
+	});
+
+	it("handles a concave (L-shaped) polygon without producing segments outside the shape", () => {
+		const lShape = [
+			{ x: 0, y: 0 },
+			{ x: 10, y: 0 },
+			{ x: 10, y: 4 },
+			{ x: 4, y: 4 },
+			{ x: 4, y: 10 },
+			{ x: 0, y: 10 },
+		];
+		const lines = hatchLines(lShape, 0, 1);
+		expect(lines.length).toBeGreaterThan(0);
+		// the notch is x in (4,10), y in (4,10) — no horizontal segment should cross through it.
+		for (const [a, b] of lines) {
+			if (a.y > 4 + 1e-6) {
+				const hi = Math.max(a.x, b.x);
+				expect(hi).toBeLessThanOrEqual(4 + 1e-6);
+			}
+		}
+	});
+
+	it("returns no segments for a degenerate (fewer than 3 point) boundary or non-positive spacing", () => {
+		expect(hatchLines([{ x: 0, y: 0 }, { x: 1, y: 1 }], 0, 1)).toEqual([]);
+		expect(hatchLines(square, 0, 0)).toEqual([]);
+		expect(hatchLines(square, 0, -1)).toEqual([]);
 	});
 });

@@ -7,13 +7,10 @@ import { promptForText } from "./TextPromptModal";
 import type DxfPlugin from "../main";
 import App from "../ui/App.svelte";
 
-const SIDECAR_SUFFIX = ".annotations.json";
-
 /**
  * File view for `.dxf` files (design doc §5). Binary Vault I/O only (mobile
  * safe). The drawing renders full-bleed; the Svelte UI (icon tool palette +
- * floating cards) sits on top. Saving is explicit and writes the DXF and the
- * annotation sidecar independently.
+ * floating cards) sits on top. Saving is explicit and writes the DXF back out.
  */
 export class DxfFileView extends FileView {
 	private controller: ViewController | null = null;
@@ -35,10 +32,6 @@ export class DxfFileView extends FileView {
 	}
 	canAcceptExtension(extension: string): boolean {
 		return DXF_EXTENSIONS.includes(extension.toLowerCase());
-	}
-
-	private sidecarPath(file: TFile): string {
-		return file.path + SIDECAR_SUFFIX;
 	}
 
 	async onLoadFile(file: TFile): Promise<void> {
@@ -77,17 +70,9 @@ export class DxfFileView extends FileView {
 			},
 		});
 
-		let annotationJSON: string | null = null;
-		try {
-			const scp = this.sidecarPath(file);
-			if (await this.app.vault.adapter.exists(scp)) annotationJSON = await this.app.vault.adapter.read(scp);
-		} catch {
-			/* ignore a missing/unreadable sidecar */
-		}
-
 		try {
 			const result = await this.plugin.parseHost.parse(text);
-			this.controller.load(result, annotationJSON);
+			this.controller.load(result);
 		} catch (err) {
 			host.createDiv({ cls: "dxf-error", text: "Failed to parse DXF: " + (err instanceof Error ? err.message : String(err)) });
 			return;
@@ -159,12 +144,6 @@ export class DxfFileView extends FileView {
 			}
 		}
 
-		if (this.controller.annotationsDirty) {
-			const json = this.controller.annotationsJSON(this.file.path);
-			await this.app.vault.adapter.write(this.sidecarPath(this.file), json);
-			this.controller.markAnnotationsSaved();
-			saved = true;
-		}
 
 		new Notice(saved ? "DXF saved." : "DXF: nothing to save.");
 	}

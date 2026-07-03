@@ -11,6 +11,16 @@ function distToSegment(p: Point2, a: Point2, b: Point2): number {
 	return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
 }
 
+/** Even-odd point-in-polygon test (ray cast along +x). */
+function pointInPolygon(p: Point2, vertices: Point2[]): boolean {
+	let inside = false;
+	for (let i = 0, j = vertices.length - 1; i < vertices.length; j = i++) {
+		const a = vertices[i], b = vertices[j];
+		if (a.y > p.y !== b.y > p.y && p.x < ((b.x - a.x) * (p.y - a.y)) / (b.y - a.y) + a.x) inside = !inside;
+	}
+	return inside;
+}
+
 /** World-space distance from a point to an entity's geometry. */
 export function distanceToEntity(p: Point2, e: RenderEntity): number {
 	switch (e.type) {
@@ -34,6 +44,14 @@ export function distanceToEntity(p: Point2, e: RenderEntity): number {
 			const v = e.vertices;
 			for (let i = 0; i < v.length - 1; i++) min = Math.min(min, distToSegment(p, v[i], v[i + 1]));
 			if (e.closed && v.length > 2) min = Math.min(min, distToSegment(p, v[v.length - 1], v[0]));
+			return min;
+		}
+		case "HATCH": {
+			// a filled region: clicking anywhere inside it picks it, not just its edge.
+			if (e.vertices.length > 2 && pointInPolygon(p, e.vertices)) return 0;
+			let min = Infinity;
+			const v = e.vertices;
+			for (let i = 0; i < v.length; i++) min = Math.min(min, distToSegment(p, v[i], v[(i + 1) % v.length]));
 			return min;
 		}
 		case "TEXT":
@@ -119,6 +137,8 @@ function outlineChains(e: RenderEntity): Point2[][] | null {
 		case "LWPOLYLINE":
 		case "POLYLINE":
 			return [e.closed && e.vertices.length > 2 ? [...e.vertices, e.vertices[0]] : e.vertices];
+		case "HATCH":
+			return [e.vertices.length > 2 ? [...e.vertices, e.vertices[0]] : e.vertices];
 		case "CIRCLE": {
 			const pts: Point2[] = [];
 			for (let i = 0; i <= 32; i++) {

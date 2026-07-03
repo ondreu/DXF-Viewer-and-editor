@@ -28,6 +28,7 @@ import { DEFAULT_THEME, type RenderTheme } from "./theme";
 import { pickEntity } from "./picking";
 import type { Overlay, OverlayPrim } from "./overlay";
 import { ellipsePoints } from "../core/geom/geometry2d";
+import { glyphFor, GLYPH_HEIGHT, GLYPH_ADVANCE } from "./vectorFont";
 
 export type RendererEvents = {
 	select: { id: string | null };
@@ -241,6 +242,8 @@ export class DxfRenderer {
 			case "LWPOLYLINE":
 			case "POLYLINE":
 				return this.lineObject(e.vertices, color, e.closed);
+			case "HATCH":
+				return this.hatchObject(e.vertices, color);
 			case "CIRCLE":
 				return this.arcObject(e.center, e.radius, 0, 360, color, true);
 			case "ARC":
@@ -262,6 +265,18 @@ export class DxfRenderer {
 			case "UNSUPPORTED":
 				return e.position ? this.markerObject(e.position, this.resolveColor(0x888888)) : null;
 		}
+	}
+
+	private hatchObject(vertices: Point2[], color: number): Object3D {
+		const g = new Group();
+		if (vertices.length >= 3) {
+			const shape = new Shape(vertices.map((p) => new Vector2(p.x, p.y)));
+			const mesh = new Mesh(new ShapeGeometry(shape), new MeshBasicMaterial({ color, side: DoubleSide }));
+			mesh.position.z = -1;
+			g.add(mesh);
+		}
+		g.add(this.lineObject(vertices, color, true));
+		return g;
 	}
 
 	private lineObject(pts: Point2[], color: number, closed: boolean): Object3D {
@@ -304,33 +319,36 @@ export class DxfRenderer {
 		return new LineSegments(geom, new LineBasicMaterial({ color }));
 	}
 
+	/**
+	 * TEXT/MTEXT rendered as real vector line geometry (a built-in stroke font)
+	 * rather than a fixed-resolution raster texture, so it stays crisp at any
+	 * zoom level or entity scale — unlike a canvas texture, which visibly
+	 * pixelates once a TEXT entity is scaled up. UNTRUSTED string: only ever
+	 * used to look up glyph strokes / advance the cursor, never rendered as
+	 * HTML (design doc §5).
+	 */
 	private textObject(text: string, pos: Point2, height: number, rotationDeg: number, color: number): Object3D | null {
 		if (!text) return null;
-		// UNTRUSTED string: rasterized via canvas, never HTML (design doc §5).
-		const canvas = document.createElement("canvas");
-		const ctx = canvas.getContext("2d");
-		if (!ctx) return null;
-		const pxHeight = 64;
-		ctx.font = `${pxHeight}px sans-serif`;
-		const w = ctx.measureText(text).width;
-		const pad = 8;
-		canvas.width = Math.max(1, Math.ceil(w) + pad * 2);
-		canvas.height = pxHeight + pad * 2;
-		const c2 = canvas.getContext("2d")!;
-		c2.font = `${pxHeight}px sans-serif`;
-		c2.textBaseline = "middle";
-		c2.fillStyle = "#" + color.toString(16).padStart(6, "0");
-		c2.fillText(text, pad, canvas.height / 2);
-
-		const texture = new CanvasTexture(canvas);
-		const worldH = height;
-		const worldW = (canvas.width / canvas.height) * worldH;
-		const geom = new PlaneGeometry(worldW, worldH);
-		const mat = new MeshBasicMaterial({ map: texture, transparent: true, side: DoubleSide });
-		const mesh = new Mesh(geom, mat);
-		mesh.position.set(pos.x + worldW / 2, pos.y + worldH / 2, 0);
-		if (rotationDeg) mesh.rotation.z = (rotationDeg * Math.PI) / 180;
-		return mesh;
+		const scale = height / GLYPH_HEIGHT;
+		const positions: number[] = [];
+		let cursorX = 0;
+		for (const ch of text) {
+			for (const stroke of glyphFor(ch)) {
+				for (let i = 0; i < stroke.length - 1; i++) {
+					const [x1, y1] = stroke[i];
+					const [x2, y2] = stroke[i + 1];
+					positions.push(cursorX + x1 * scale, y1 * scale, 0, cursorX + x2 * scale, y2 * scale, 0);
+				}
+			}
+			cursorX += GLYPH_ADVANCE * scale;
+		}
+		if (!positions.length) return null;
+		const geom = new BufferGeometry().setAttribute("position", new Float32BufferAttribute(positions, 3));
+		const mat = new LineBasicMaterial({ color });
+		const lines = new LineSegments(geom, mat);
+		lines.position.set(pos.x, pos.y, 0);
+		if (rotationDeg) lines.rotation.z = (rotationDeg * Math.PI) / 180;
+		return lines;
 	}
 
 	private resolveColor(color: number): number {
@@ -811,7 +829,8 @@ export class DxfRenderer {
 					break;
 				}
 				case "LWPOLYLINE":
-				case "POLYLINE": e.vertices.forEach(acc); break;
+				case "POLYLINE":
+				case "HATCH": e.vertices.forEach(acc); break;
 				case "TEXT":
 				case "MTEXT": acc(e.position); break;
 				case "INSERT":

@@ -50,6 +50,30 @@ export function entityToTags(e: RenderEntity, handle: string): DxfTag[] | null {
 				tags.push({ code: 20, value: fmtReal(v.y) });
 			}
 			return tags;
+		case "HATCH":
+			// R12-compatible solid-fill HATCH: one external polyline boundary path,
+			// no pattern definition (pattern name "SOLID"), non-associative. Group
+			// code order matches the DXF reference exactly (elevation point, pattern
+			// name/fill flags, boundary path count + data, then the trailing
+			// style/pattern/seed-point codes).
+			pt(0, 0, 10, 20, 30); // elevation point
+			tags.push({ code: 2, value: "SOLID" }); // pattern name
+			tags.push({ code: 70, value: "1" }); // solid fill flag
+			tags.push({ code: 71, value: "0" }); // associativity flag (not associative)
+			tags.push({ code: 91, value: "1" }); // number of boundary paths
+			tags.push({ code: 92, value: "3" }); // path type: external(1) | polyline(2)
+			tags.push({ code: 72, value: "0" }); // has-bulge flag
+			tags.push({ code: 73, value: "1" }); // is-closed flag
+			tags.push({ code: 93, value: String(e.vertices.length) }); // vertex count
+			for (const v of e.vertices) {
+				tags.push({ code: 10, value: fmtReal(v.x) });
+				tags.push({ code: 20, value: fmtReal(v.y) });
+			}
+			tags.push({ code: 97, value: "0" }); // number of source boundary objects
+			tags.push({ code: 75, value: "0" }); // hatch style: normal (odd-parity)
+			tags.push({ code: 76, value: "1" }); // pattern type: predefined
+			tags.push({ code: 98, value: "0" }); // number of seed points
+			return tags;
 		case "TEXT":
 			pt(e.position.x, e.position.y, 10, 20, 30);
 			tags.push({ code: 40, value: fmtReal(e.height) });

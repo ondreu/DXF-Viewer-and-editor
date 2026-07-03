@@ -17,8 +17,7 @@ import {
 	ChangeColorCommand,
 	DeleteCommand,
 } from "../core/command/commands";
-import { AnnotationStore } from "../core/annotation/AnnotationStore";
-import { circumcircle, angleInArc, isCuttingEdgeType, computeFillet, computeChamfer, trimLinePoint, extendLinePoint, trimArcAngle, entityArea, joinLineChain, ellipsePoints, buildLinearDimension, applyOrtho, isFullEllipseSweep, type FilletResult } from "../core/geom/geometry2d";
+import { circumcircle, angleInArc, isCuttingEdgeType, computeFillet, computeChamfer, trimLinePoint, extendLinePoint, trimArcAngle, entityArea, joinLineChain, ellipsePoints, buildLinearDimension, applyOrtho, isFullEllipseSweep, hatchLines, type FilletResult } from "../core/geom/geometry2d";
 import { entitiesInRect } from "../render/picking";
 
 /** Prompt for a number via the shared text modal; returns null if cancelled or unparsable. */
@@ -146,6 +145,7 @@ function gripsOf(e: RenderEntity): Grip[] {
 			];
 		case "LWPOLYLINE":
 		case "POLYLINE":
+		case "HATCH":
 			return e.vertices.map((v, i) => ({ mode: "vertex", pairIndex: i, point: v }));
 		case "CIRCLE":
 		case "ARC":
@@ -172,7 +172,7 @@ export class SelectTool implements Tool {
 	readonly id: ToolId = "select";
 	readonly panWithLeftDrag = true;
 	private drag: null | {
-		kind: "vertex" | "whole" | "group" | "annotation";
+		kind: "vertex" | "whole" | "group";
 		id: string;
 		ids?: string[];
 		pairIndex?: number;
@@ -230,16 +230,9 @@ export class SelectTool implements Tool {
 		this.drag = null;
 		this.box = null;
 
-		// 1. grab a note annotation?
-		const annoId = this.ctx.annotationAt(world);
-		if (annoId) {
-			this.drag = { kind: "annotation", id: annoId, gripOrigin: world, cursorStart: world, basePoint: world };
-			return true;
-		}
-
 		const selIds = this.ctx.selectedIds().filter((id) => doc.isEditable(id));
 
-		// 2. multiple selected and grabbing one of them: move the whole group.
+		// 1. multiple selected and grabbing one of them: move the whole group.
 		if (selIds.length > 1) {
 			const hit = this.ctx.pick(world);
 			if (hit && selIds.includes(hit)) {
@@ -248,7 +241,7 @@ export class SelectTool implements Tool {
 			}
 		}
 
-		// 3. grab a grip / body of the selected editable entity?
+		// 2. grab a grip / body of the selected editable entity?
 		const selId = this.ctx.selectedId();
 		if (selId && doc.isEditable(selId)) {
 			const e = doc.getEntity(selId);
@@ -283,7 +276,7 @@ export class SelectTool implements Tool {
 			}
 		}
 
-		// 4. nothing grabbed: on a mouse/pen a left-drag from empty space starts a
+		// 3. nothing grabbed: on a mouse/pen a left-drag from empty space starts a
 		// rubber-band selection (CAD-style window/crossing box); touch keeps its
 		// simpler pan-to-scroll gesture since there's no reliable modifier key.
 		if (ev && ev.pointerType !== "touch") {
@@ -322,7 +315,7 @@ export class SelectTool implements Tool {
 			const e = this.ctx.doc()?.getEntity(this.drag.id);
 			if (e) prims.push(...outlineWithVertex(e, this.drag.pairIndex!, p));
 			prims.push({ kind: "marker", at: p, style: "square", color: this.ctx.accent, sizePx: 6 });
-		} else if (this.drag.kind === "whole" || this.drag.kind === "group") {
+		} else {
 			const { dx, dy, target } = this.moveDelta(world, this.drag.basePoint);
 			const doc = this.ctx.doc();
 			const ids = this.drag.ids ?? [this.drag.id];
@@ -331,10 +324,6 @@ export class SelectTool implements Tool {
 				if (e) prims.push(...outlineTranslated(e, dx, dy));
 			}
 			prims.push({ kind: "marker", at: target, style: "square", color: this.ctx.accent, sizePx: 6 });
-		} else {
-			const { p, prim } = snapMarker(this.ctx, world);
-			prims.push({ kind: "marker", at: p, style: "dot", color: this.ctx.accent, sizePx: 6 });
-			if (prim) prims.push(prim);
 		}
 		this.ctx.setOverlay(prims);
 	}
@@ -379,16 +368,12 @@ export class SelectTool implements Tool {
 			const dx = p.x - d.gripOrigin.x;
 			const dy = p.y - d.gripOrigin.y;
 			if (dx || dy) this.ctx.execute(new MoveVertexCommand(d.id, d.pairIndex!, dx, dy));
-		} else if (d.kind === "whole" || d.kind === "group") {
+		} else {
 			const { dx, dy } = this.moveDelta(world, d.basePoint);
 			if (dx || dy) {
 				const ids = d.ids ?? [d.id];
 				for (const id of ids) this.ctx.execute(new MoveCommand(id, dx, dy));
 			}
-		} else {
-			const { p } = snapMarker(this.ctx, world);
-			const attach = this.ctx.pick(p);
-			this.ctx.moveAnnotationTo(d.id, p, attach);
 		}
 		this.showGrips();
 	}
@@ -469,6 +454,8 @@ function outlinePoints(e: RenderEntity): Point2[] | null {
 		case "LWPOLYLINE":
 		case "POLYLINE":
 			return e.closed ? [...e.vertices, e.vertices[0]] : e.vertices;
+		case "HATCH":
+			return [...e.vertices, e.vertices[0]];
 		default:
 			return null;
 	}
@@ -499,6 +486,11 @@ function outlineWithVertex(e: RenderEntity, pairIndex: number, np: Point2): Over
 		if (e.closed && pts.length) pts.push(pts[0]);
 		return [{ kind: "line", pts, dashed: true }];
 	}
+	if (e.type === "HATCH") {
+		const pts = e.vertices.map((v, i) => (i === pairIndex ? np : v));
+		if (pts.length) pts.push(pts[0]);
+		return [{ kind: "line", pts, dashed: true }];
+	}
 	if (e.type === "ELLIPSE" && pairIndex === 1) {
 		return [{ kind: "line", pts: ellipsePoints(e.center, np, e.ratio, e.startAngle, e.endAngle), dashed: true }];
 	}
@@ -522,8 +514,8 @@ export class MeasureDistanceTool implements Tool {
 			if (this.pts.length === 2) {
 				const [a, b] = this.pts;
 				const dx = b.x - a.x, dy = b.y - a.y;
-				this.ctx.reportMeasurement({ kind: "distance", length: Math.hypot(dx, dy), dx, dy, angleDeg: norm360((Math.atan2(dy, dx) * 180) / Math.PI) }, [a, b]);
-				// keep the measured segment on screen (and available to "save as annotation")
+				this.ctx.reportMeasurement({ kind: "distance", length: Math.hypot(dx, dy), dx, dy, angleDeg: norm360((Math.atan2(dy, dx) * 180) / Math.PI) });
+				// keep the measured segment on screen until the next measurement/tool switch
 				this.ctx.setOverlay([
 					{ kind: "line", pts: [a, b], color: this.ctx.accent, dashed: true },
 					{ kind: "marker", at: a, style: "x", color: this.ctx.accent, sizePx: 4 },
@@ -576,7 +568,7 @@ export class MeasureRadiusTool implements Tool {
 		const e = id ? this.ctx.doc()?.getEntity(id) : undefined;
 		if (e && (e.type === "CIRCLE" || e.type === "ARC")) {
 			const r = e.radius;
-			this.ctx.reportMeasurement({ kind: "radius", radius: r, diameter: r * 2, circumference: 2 * Math.PI * r }, [e.center, { x: e.center.x + r, y: e.center.y }]);
+			this.ctx.reportMeasurement({ kind: "radius", radius: r, diameter: r * 2, circumference: 2 * Math.PI * r });
 			this.ctx.setOverlay([
 				{ kind: "circle", center: e.center, radius: r, color: this.ctx.accent, dashed: true },
 				{ kind: "line", pts: [e.center, { x: e.center.x + r, y: e.center.y }], color: this.ctx.accent },
@@ -611,7 +603,7 @@ export class MeasureAngleTool implements Tool {
 				const a2 = Math.atan2(b.y - v.y, b.x - v.x);
 				let deg = norm360(((a2 - a1) * 180) / Math.PI);
 				if (deg > 180) deg = 360 - deg;
-				this.ctx.reportMeasurement({ kind: "angle", angleDeg: deg }, [a, v, b]);
+				this.ctx.reportMeasurement({ kind: "angle", angleDeg: deg });
 				this.ctx.setOverlay([
 					{ kind: "line", pts: [a, v, b], color: this.ctx.accent },
 					{ kind: "label", at: v, text: `${deg.toFixed(2)}°`, color: this.ctx.accent },
@@ -658,7 +650,7 @@ export class MeasureAreaTool implements Tool {
 			this.ctx.reportMeasurement({ kind: "area", area: a.area, perimeter: a.perimeter });
 			const prims: OverlayPrim[] = [];
 			if (e.type === "CIRCLE") prims.push({ kind: "circle", center: e.center, radius: e.radius, color: this.ctx.accent, dashed: true });
-			else if (e.type === "LWPOLYLINE" || e.type === "POLYLINE") prims.push({ kind: "line", pts: [...e.vertices, e.vertices[0]], color: this.ctx.accent, dashed: true });
+			else if (e.type === "LWPOLYLINE" || e.type === "POLYLINE" || e.type === "HATCH") prims.push({ kind: "line", pts: [...e.vertices, e.vertices[0]], color: this.ctx.accent, dashed: true });
 			const anchor = this.ctx.doc()?.anchorOf(id!) ?? world;
 			prims.push({ kind: "label", at: anchor, text: `A ${a.area.toFixed(3)} · P ${a.perimeter.toFixed(3)}`, color: this.ctx.accent });
 			this.ctx.setOverlay(prims);
@@ -672,6 +664,85 @@ export class MeasureAreaTool implements Tool {
 	}
 }
 
+/** Trace an arbitrary shape's corners (like the polyline draw tool) to read its
+ * area/perimeter, for regions that aren't already a single closed entity. */
+export class MeasureAreaPolygonTool implements Tool {
+	readonly id: ToolId = "measure-area-polygon";
+	readonly panWithLeftDrag = false;
+	private pts: Point2[] = [];
+	private lastDownTime = 0;
+	private lastDownPos: Point2 | null = null;
+	constructor(private ctx: ToolContext) {}
+	deactivate(): void {
+		this.reset();
+	}
+	pointer(phase: string, world: Point2): void {
+		const { p, prim } = snapMarker(this.ctx, world);
+		if (phase === "down") {
+			const now = Date.now();
+			// Double-click (or click near the first vertex) closes the shape — no
+			// keyboard needed, matching the polyline draw tool's interaction.
+			const doubleClick = now - this.lastDownTime < 350 && this.lastDownPos && dist(this.lastDownPos, p) < this.tol();
+			if (this.pts.length >= 3 && (doubleClick || dist(this.pts[0], p) < this.tol())) {
+				this.finish();
+				return;
+			}
+			this.pts.push(p);
+			this.lastDownTime = now;
+			this.lastDownPos = p;
+		}
+		const prims: OverlayPrim[] = [];
+		if (this.pts.length) {
+			prims.push({ kind: "line", pts: [...this.pts, p], color: this.ctx.accent, dashed: true });
+			prims.push({ kind: "marker", at: this.pts[0], style: "square", color: this.ctx.accent, sizePx: 5 });
+		}
+		if (prim) prims.push(prim);
+		this.ctx.setOverlay(prims);
+	}
+	private tol(): number {
+		return this.ctx.pixelSize() * 10;
+	}
+	key(ev: KeyboardEvent): boolean {
+		if (ev.key === "Enter") {
+			this.finish();
+			return true;
+		}
+		if (ev.key === "Escape") {
+			this.reset();
+			return true;
+		}
+		return false;
+	}
+	private finish(): void {
+		if (this.pts.length >= 3) {
+			const v = this.pts;
+			let twiceArea = 0;
+			let perimeter = 0;
+			for (let i = 0; i < v.length; i++) {
+				const a = v[i], b = v[(i + 1) % v.length];
+				twiceArea += a.x * b.y - b.x * a.y;
+				perimeter += dist(a, b);
+			}
+			const area = Math.abs(twiceArea) / 2;
+			this.ctx.reportMeasurement({ kind: "area", area, perimeter });
+			this.ctx.setOverlay([
+				{ kind: "polygon", pts: v.slice(), color: this.ctx.accent, opacity: 0.2 },
+				{ kind: "line", pts: [...v, v[0]], color: this.ctx.accent },
+				{ kind: "label", at: v[v.length - 1], text: `A ${area.toFixed(3)} · P ${perimeter.toFixed(3)}`, color: this.ctx.accent },
+			]);
+		}
+		this.pts = [];
+	}
+	private reset(): void {
+		this.pts = [];
+		this.ctx.setOverlay([]);
+		this.ctx.reportMeasurement(null);
+	}
+	hint(): string {
+		return "Click to trace a shape's corners · double-click, Enter, or click the first point to close it and read area/perimeter · Esc to cancel";
+	}
+}
+
 export class MeasurePointTool implements Tool {
 	readonly id: ToolId = "measure-point";
 	readonly panWithLeftDrag = false;
@@ -679,7 +750,7 @@ export class MeasurePointTool implements Tool {
 	pointer(phase: string, world: Point2): void {
 		const { p, prim } = snapMarker(this.ctx, world);
 		if (phase === "down") {
-			this.ctx.reportMeasurement({ kind: "point", x: p.x, y: p.y }, [p]);
+			this.ctx.reportMeasurement({ kind: "point", x: p.x, y: p.y });
 		}
 		const prims: OverlayPrim[] = [{ kind: "label", at: p, text: `(${p.x.toFixed(3)}, ${p.y.toFixed(3)})`, color: this.ctx.accent }];
 		if (prim) prims.push(prim);
@@ -2359,29 +2430,9 @@ export class TextTool implements Tool {
 	}
 }
 
-export class AnnotateTool implements Tool {
-	readonly id: ToolId = "annotate";
-	readonly panWithLeftDrag = false;
-	constructor(private ctx: ToolContext) {}
-	pointer(phase: string, world: Point2): void {
-		if (phase !== "down") {
-			const { prim } = snapMarker(this.ctx, world);
-			this.ctx.setOverlay(prim ? [prim] : []);
-			return;
-		}
-		const { p } = snapMarker(this.ctx, world);
-		void this.ctx.promptText("").then((text) => {
-			if (!text) return;
-			this.ctx.addAnnotation({ id: AnnotationStore.newId(), kind: "note", at: p, text });
-		});
-	}
-	hint(): string {
-		return "Click a point to drop a note (stored in the sidecar JSON)";
-	}
-}
-
-/** The closed loop of points a fill can trace: a closed LWPOLYLINE's vertices, a
- * sampled CIRCLE, or a sampled full ELLIPSE. Null for anything open/unsupported. */
+/** The closed loop of points a fill/hatch can trace: a closed LWPOLYLINE's
+ * vertices, a sampled CIRCLE, or a sampled full ELLIPSE. Null for anything
+ * open/unsupported. */
 function closedBoundaryOf(e: RenderEntity): Point2[] | null {
 	if (e.type === "CIRCLE") {
 		const pts: Point2[] = [];
@@ -2401,14 +2452,12 @@ function closedBoundaryOf(e: RenderEntity): Point2[] | null {
 }
 
 /**
- * Fill (hatch) a closed region: click a closed polyline, circle or full
- * ellipse to trace a solid fill over it. Saved as a "fill" annotation in the
- * sidecar JSON — like notes and saved measurements, never as a DXF entity —
- * so it can never write malformed HATCH geometry into the drawing. It's a
- * traced snapshot: resizing the source shape afterwards doesn't move the fill.
+ * Solid-fill a closed region: click a closed polyline, circle or full ellipse
+ * to trace a real DXF HATCH entity over it (solid fill pattern). Uses the
+ * active layer/colour like every other draw tool.
  */
-export class HatchTool implements Tool {
-	readonly id: ToolId = "hatch";
+export class HatchSolidTool implements Tool {
+	readonly id: ToolId = "hatch-solid";
 	readonly panWithLeftDrag = false;
 	constructor(private ctx: ToolContext) {}
 	pointer(phase: string, world: Point2): void {
@@ -2420,11 +2469,61 @@ export class HatchTool implements Tool {
 			this.ctx.setOverlay(boundary ? [{ kind: "polygon", pts: boundary, color: this.ctx.accent, opacity: 0.3 }] : []);
 			return;
 		}
-		if (!boundary || !e) return;
-		this.ctx.addAnnotation({ id: AnnotationStore.newId(), kind: "fill", points: boundary, color: e.color });
+		if (!boundary) return;
+		const spec: NewEntitySpec = { type: "HATCH", layer: this.ctx.activeLayer(), vertices: boundary };
+		const c = this.ctx.activeColor();
+		if (c !== null) spec.colorNumber = c;
+		this.ctx.execute(new AddEntityCommand(spec));
 	}
 	hint(): string {
-		return "Click a closed polyline, circle or full ellipse to fill it — saved in the sidecar (like notes/measurements), so it won't appear in other DXF apps";
+		return "Click a closed polyline, circle or full ellipse to solid-fill it (real HATCH entity, uses the active layer/colour)";
+	}
+}
+
+/**
+ * Hatch a closed region with parallel lines: click a closed polyline, circle
+ * or full ellipse, then set the line spacing and angle. Built from plain LINE
+ * entities (clipped to the boundary) — not a DXF pattern HATCH — so it always
+ * renders identically everywhere, at the active layer/colour.
+ */
+export class HatchLinesTool implements Tool {
+	readonly id: ToolId = "hatch-lines";
+	readonly panWithLeftDrag = false;
+	private lastSpacing = 5;
+	private lastAngle = 45;
+	constructor(private ctx: ToolContext) {}
+	pointer(phase: string, world: Point2): void {
+		const doc = this.ctx.doc();
+		const id = doc ? this.ctx.pick(world) : null;
+		const e = id ? doc?.getEntity(id) : undefined;
+		const boundary = e ? closedBoundaryOf(e) : null;
+		if (phase !== "down") {
+			this.ctx.setOverlay(boundary ? [{ kind: "polygon", pts: boundary, color: this.ctx.accent, opacity: 0.3 }] : []);
+			return;
+		}
+		if (!boundary) return;
+		void this.run(boundary);
+	}
+	private async run(boundary: Point2[]): Promise<void> {
+		const spacing = await promptNumber(this.ctx, "Hatch line spacing (scale)", this.lastSpacing);
+		if (spacing === null || spacing <= 0) return;
+		this.lastSpacing = spacing;
+		const angle = await promptNumber(this.ctx, "Hatch line angle (degrees)", this.lastAngle);
+		if (angle === null) return;
+		this.lastAngle = angle;
+		const segments = hatchLines(boundary, angle, spacing);
+		if (!segments.length) return;
+		const layer = this.ctx.activeLayer();
+		const c = this.ctx.activeColor();
+		const cmds: Command[] = segments.map(([start, end]) => {
+			const spec: NewEntitySpec = { type: "LINE", layer, start, end };
+			if (c !== null) spec.colorNumber = c;
+			return new AddEntityCommand(spec);
+		});
+		this.ctx.execute(new BatchCommand(cmds, "Hatch"));
+	}
+	hint(): string {
+		return "Click a closed polyline, circle or full ellipse, then set the line spacing (scale) and angle";
 	}
 }
 
@@ -2529,6 +2628,7 @@ export function createTools(ctx: ToolContext): Record<ToolId, Tool> {
 		"measure-radius": new MeasureRadiusTool(ctx),
 		"measure-angle": new MeasureAngleTool(ctx),
 		"measure-area": new MeasureAreaTool(ctx),
+		"measure-area-polygon": new MeasureAreaPolygonTool(ctx),
 		"measure-point": new MeasurePointTool(ctx),
 		"draw-line": new DrawLineTool(ctx),
 		"draw-circle": new DrawCircleTool(ctx),
@@ -2557,7 +2657,7 @@ export function createTools(ctx: ToolContext): Record<ToolId, Tool> {
 		"break": new BreakTool(ctx),
 		"explode": new ExplodeTool(ctx),
 		"dimension-linear": new DimensionLinearTool(ctx),
-		"annotate": new AnnotateTool(ctx),
-		"hatch": new HatchTool(ctx),
+		"hatch-solid": new HatchSolidTool(ctx),
+		"hatch-lines": new HatchLinesTool(ctx),
 	};
 }

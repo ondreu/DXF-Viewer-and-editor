@@ -30,8 +30,5 @@
 				<span class="dxf-k">Angle</span><span class="dxf-v dxf-mono">{m.angleDeg.toFixed(3)}°</span>
 			{/if}
 		</div>
-		<button class="dxf-text-btn" on:click={() => controller.saveMeasurementAsAnnotation()}>
-			Save as annotation
-		</button>
 	</Card>
 {/if}

@@ -5,7 +5,6 @@
 	import PropertiesCard from "./PropertiesCard.svelte";
 	import MeasureCard from "./MeasureCard.svelte";
 	import LayersCard from "./LayersCard.svelte";
-	import AnnotationsCard from "./AnnotationsCard.svelte";
 	import type { ViewController, ControllerState } from "../view/ViewController";
 
 	export let controller: ViewController;
@@ -15,7 +14,6 @@
 	let state: ControllerState = controller.getState();
 	let unsub: (() => void) | null = null;
 	let showLayers = false;
-	let showAnnotations = false;
 
 	onMount(() => {
 		unsub = controller.events.on("state", (s) => (state = s));
@@ -48,7 +46,6 @@
 			/>
 			<span class="dxf-top-sep" />
 			<button class="dxf-icon-btn" class:is-active={showLayers} title="Layers & draw settings" on:click={() => (showLayers = !showLayers)} use:icon={"layers"} />
-			<button class="dxf-icon-btn" class:is-active={showAnnotations} title="Annotations" on:click={() => (showAnnotations = !showAnnotations)} use:icon={"sticky-note"} />
 			<span class="dxf-top-sep" />
 			<button class="dxf-icon-btn cta" title="Save (Ctrl/Cmd+S)" on:click={onSave} use:icon={"save"}>
 				{#if state.dirty}<span class="dxf-dot" />{/if}
@@ -61,9 +58,6 @@
 		<MeasureCard {controller} {state} />
 		{#if showLayers}
 			<LayersCard {controller} {state} onClose={() => (showLayers = false)} />
-		{/if}
-		{#if showAnnotations}
-			<AnnotationsCard {controller} {state} onClose={() => (showAnnotations = false)} />
 		{/if}
 	</div>
 

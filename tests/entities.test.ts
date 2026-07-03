@@ -62,4 +62,51 @@ describe("drawing new entities (design doc §8)", () => {
 		stack.redo();
 		expect(parseDxf(doc.serialize()).entities.filter((e) => e.type === "LINE").length).toBe(2);
 	});
+
+	it("adds a solid-fill HATCH whose raw tag stream a real DXF parser can safely skip over without desyncing the rest of the file", () => {
+		const doc = DxfDocument.fromResult(parseDxf(FIXTURE));
+		const stack = new CommandStack(doc);
+		const before = parseDxf(FIXTURE).entities.length;
+		stack.execute(
+			new AddEntityCommand({
+				type: "HATCH",
+				layer: "0",
+				colorNumber: 3,
+				vertices: [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }],
+			})
+		);
+		// Add a LINE *after* the HATCH so a parser that mis-consumes the HATCH's
+		// body would desync and either drop this LINE or misparse it.
+		stack.execute(new AddEntityCommand({ type: "LINE", layer: "0", start: { x: 20, y: 20 }, end: { x: 30, y: 30 } }));
+
+		const serialized = doc.serialize();
+		// dxf-parser has no HATCH handler; it logs "Unhandled entity" and skips
+		// group-by-group to the next 0-code tag. This must not throw, and the
+		// trailing LINE must still parse correctly — proving the HATCH's tag
+		// stream contains no stray group-0 codes that would desync the parser.
+		expect(() => parseDxf(serialized)).not.toThrow();
+		const re = parseDxf(serialized);
+		expect(re.entities.length).toBe(before + 2); // HATCH -> UNSUPPORTED placeholder, plus the LINE
+		const trailingLine = re.entities.filter((e) => e.type === "LINE").pop() as { start: { x: number; y: number }; end: { x: number; y: number } };
+		expect(trailingLine.start).toEqual({ x: 20, y: 20 });
+		expect(trailingLine.end).toEqual({ x: 30, y: 30 });
+		// Our own parser doesn't attempt to understand arbitrary HATCH boundary
+		// data (real-world hatches are far more varied), so it round-trips as an
+		// UNSUPPORTED placeholder rather than a filled region — but it must still
+		// carry its handle/position so it's preserved (never silently dropped).
+		const hatch = re.entities.find((e) => e.type === "UNSUPPORTED" && (e as { dxfType: string }).dxfType === "HATCH");
+		expect(hatch).toBeDefined();
+
+		// The raw tag stream itself must follow the documented group-code order.
+		const tags = tokenize(serialized).tags;
+		const hatchStart = tags.findIndex((t) => t.code === 0 && t.value === "HATCH");
+		expect(hatchStart).toBeGreaterThanOrEqual(0);
+		const codesFrom = (i: number, n: number) => tags.slice(i, i + n).map((t) => t.code);
+		expect(codesFrom(hatchStart, 8)).toEqual([0, 5, 8, 62, 10, 20, 30, 2]);
+		// solid fill (70=1), non-associative (71=0), one boundary path (91=1),
+		// external+polyline flags (92=3), no bulge (72=0), closed (73=1), 4 verts (93=4).
+		expect(codesFrom(hatchStart + 8, 7)).toEqual([70, 71, 91, 92, 72, 73, 93]);
+		expect(codesFrom(hatchStart + 15, 8)).toEqual([10, 20, 10, 20, 10, 20, 10, 20]);
+		expect(codesFrom(hatchStart + 23, 4)).toEqual([97, 75, 76, 98]);
+	});
 });
