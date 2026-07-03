@@ -209,6 +209,9 @@ export function specFromEntity(e: RenderEntity, dx: number, dy: number): NewEnti
 			return { type: "LWPOLYLINE", layer: e.layer, colorNumber: e.colorNumber, vertices: e.vertices.map(shift), closed: e.closed };
 		case "TEXT":
 			return { type: "TEXT", layer: e.layer, colorNumber: e.colorNumber, position: shift(e.position), height: e.height, rotation: e.rotation, text: e.text };
+		case "XLINE":
+		case "RAY":
+			return { type: e.type, layer: e.layer, colorNumber: e.colorNumber, basePoint: shift(e.basePoint), through: shift(e.through) };
 		default:
 			return null;
 	}

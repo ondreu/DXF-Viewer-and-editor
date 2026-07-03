@@ -15,6 +15,42 @@ export function angleInArc(a: number, start: number, end: number): boolean {
 	return rel <= sweep + 1e-6;
 }
 
+/**
+ * How far a construction line (XLINE/RAY) is extended to stand in for its
+ * infinite length. Large enough to span any realistic drawing/viewport, so a
+ * single fixed-length segment can be picked, snapped and rendered like a normal
+ * line without re-clipping on every pan/zoom, yet finite so it never trips up
+ * float math. Kept out of the drawing's fit bounds by the renderer.
+ */
+export const CONSTRUCTION_LINE_REACH = 1e6;
+
+/**
+ * The finite segment standing in for a construction line. An XLINE extends
+ * `reach` in both directions from its base point; a RAY starts at the base and
+ * extends `reach` only along its direction. Direction is taken from
+ * `base`→`through` (normalized; falls back to +X if the two points coincide).
+ */
+export function constructionLineSegment(
+	base: Point2,
+	through: Point2,
+	ray: boolean,
+	reach = CONSTRUCTION_LINE_REACH
+): [Point2, Point2] {
+	let dx = through.x - base.x;
+	let dy = through.y - base.y;
+	const len = Math.hypot(dx, dy);
+	if (len < 1e-12) {
+		dx = 1;
+		dy = 0;
+	} else {
+		dx /= len;
+		dy /= len;
+	}
+	const far: Point2 = { x: base.x + dx * reach, y: base.y + dy * reach };
+	const start: Point2 = ray ? { ...base } : { x: base.x - dx * reach, y: base.y - dy * reach };
+	return [start, far];
+}
+
 /** Perimeter/arc-length of a single entity (0 for point-like or unsupported types). */
 export function entityLength(e: RenderEntity): number {
 	switch (e.type) {

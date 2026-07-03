@@ -20,6 +20,8 @@ export type ToolId =
 	| "draw-arc"
 	| "draw-arc-3p"
 	| "draw-ellipse"
+	| "draw-xline"
+	| "draw-ray"
 	| "draw-polyline"
 	| "draw-rectangle"
 	| "draw-polygon"

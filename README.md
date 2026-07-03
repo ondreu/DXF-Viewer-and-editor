@@ -28,7 +28,9 @@ This is **v1: DXF only**. DWG is intentionally out of scope (see
   tool, then close it) for regions that aren't already one closed entity, and
   a coordinate readout (ID point) — all shown in a floating readout.
 - **Draw** — line, circle (centre+radius, 2-point or 3-point), arc
-  (centre+start+end or 3-point), ellipse, polyline, rectangle, regular polygon
+  (centre+start+end or 3-point), ellipse, **construction lines** (an infinite
+  `XLINE` or a semi-infinite `RAY` — guides you can snap other geometry to,
+  especially at their intersections), polyline, rectangle, regular polygon
   (any side count), text, a linear dimension, and fill/hatch. Drawn geometry
   becomes **real DXF entities** written back to the file on save. Lines and
   polylines get a soft angle assist near 0/90/180/270°; an **Ortho** toggle in
@@ -38,8 +40,8 @@ This is **v1: DXF only**. DWG is intentionally out of scope (see
   zoom or entity scale instead of pixelating like a raster texture would
   (lowercase reuses the uppercase letterforms).
 - **Editing** — move, copy, rotate, scale, mirror, delete, and change the
-  layer/colour of `LINE`, `CIRCLE`, `ARC`, `ELLIPSE`, `LWPOLYLINE`, `HATCH` and
-  `TEXT` entities, with undo/redo.
+  layer/colour of `LINE`, `CIRCLE`, `ARC`, `ELLIPSE`, `LWPOLYLINE`, `HATCH`,
+  `TEXT`, `XLINE` and `RAY` entities, with undo/redo.
 - **Multi-select** — `Ctrl`/`Cmd`+click to add entities to the selection; drag a
   box over empty space for a CAD-style **window/crossing** rubber-band select
   (left-to-right catches only fully-enclosed entities, right-to-left catches
@@ -115,8 +117,9 @@ This is **v1: DXF only**. DWG is intentionally out of scope (see
   switching tabs never fights the currently active tool), plus tabs —
   **Measure** (distance / radius / angle / area / traced-polygon area / point)
   · **Draw** (line / circle [centre-radius, 2-point, 3-point] / arc
-  [centre-based, 3-point] / ellipse / polyline / rectangle / polygon / text /
-  linear dimension / fill / hatch) · **Modify** (copy / rotate / scale /
+  [centre-based, 3-point] / ellipse / construction line / ray / polyline /
+  rectangle / polygon / text / linear dimension / fill / hatch) · **Modify**
+  (copy / rotate / scale /
   mirror / fillet / chamfer / trim / extend / offset / join / break /
   explode) · **Arrange** (rectangular array / polar array / match
   properties).
@@ -134,7 +137,7 @@ This is **v1: DXF only**. DWG is intentionally out of scope (see
 
 | Entity | View | Edit |
 |---|---|---|
-| LINE, CIRCLE, ARC, ELLIPSE, LWPOLYLINE, HATCH (solid fill only), TEXT | ✅ | ✅ (move / rotate / scale / mirror / delete / layer / colour / dimensions) |
+| LINE, CIRCLE, ARC, ELLIPSE, LWPOLYLINE, HATCH (solid fill only), TEXT, XLINE, RAY | ✅ | ✅ (move / rotate / scale / mirror / delete / layer / colour / dimensions) |
 | POLYLINE, MTEXT, INSERT (flattened blocks) | ✅ | — |
 | Everything else (including pattern/multi-loop HATCH from other CAD tools) | placeholder marker | preserved on save |
 

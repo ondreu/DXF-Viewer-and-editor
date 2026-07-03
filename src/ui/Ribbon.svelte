@@ -50,6 +50,8 @@
 				{ id: "draw-arc", name: "spline-pointer", label: "Arc", title: "Draw arc (centre + start + end)" },
 				{ id: "draw-arc-3p", name: "waypoints", label: "Arc 3P", title: "Draw arc (3-point)" },
 				{ id: "draw-ellipse", name: "egg", label: "Ellipse" },
+				{ id: "draw-xline", name: "move-horizontal", label: "Constr. line", title: "Construction line (infinite XLINE)" },
+				{ id: "draw-ray", name: "move-up-right", label: "Ray", title: "Ray (semi-infinite construction line)" },
 				{ id: "draw-polyline", name: "spline", label: "Polyline" },
 				{ id: "draw-rectangle", name: "rectangle-horizontal", label: "Rectangle" },
 				{ id: "draw-polygon", name: "hexagon", label: "Polygon", title: "Draw regular polygon" },

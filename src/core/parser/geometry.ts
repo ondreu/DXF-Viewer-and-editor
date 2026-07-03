@@ -109,10 +109,31 @@ export function buildRenderModel(
 
 	for (const [handle, range] of Object.entries(ranges)) {
 		if (seenHandles.has(handle)) continue;
+		const dxfType = tags[range.start]?.value ?? "?";
+		// XLINE/RAY (construction lines) — dxf-parser has no handler for them, so
+		// they arrive here. Build the real entity from raw tags rather than a
+		// placeholder. Group 10/20 = base point (WCS), group 11/21 = direction.
+		if (dxfType === "XLINE" || dxfType === "RAY") {
+			const cl = readConstructionLine(tags, range);
+			if (cl) {
+				const layer = cl.layer;
+				const { color, colorNumber } = resolveColor({ colorIndex: cl.colorIndex, layer });
+				entities.push({
+					id: handle,
+					type: dxfType,
+					layer,
+					color,
+					colorNumber,
+					basePoint: cl.base,
+					through: { x: cl.base.x + cl.dir.x, y: cl.base.y + cl.dir.y },
+				});
+				continue;
+			}
+		}
 		entities.push({
 			id: handle,
 			type: "UNSUPPORTED",
-			dxfType: tags[range.start]?.value ?? "?",
+			dxfType,
 			layer: readLayer(tags, range),
 			color: 0x888888,
 			position: readFirstPoint(tags, range),
@@ -394,6 +415,31 @@ function readLayerTags(
 		else if (t.code === 370 && out.lineWeight === undefined) out.lineWeight = parseInt(t.value, 10);
 	}
 	return out;
+}
+
+/** Read an XLINE/RAY's base point, direction vector, layer and colour from raw tags. */
+function readConstructionLine(
+	tags: DxfTag[],
+	range: TagRange
+): { base: Point2; dir: Point2; layer: string; colorIndex?: number } | null {
+	let bx: number | undefined, by: number | undefined;
+	let dx: number | undefined, dy: number | undefined;
+	let layer = "0";
+	let colorIndex: number | undefined;
+	for (let i = range.start + 1; i < range.end; i++) {
+		const t = tags[i];
+		if (t.code === 0) break;
+		if (t.code === 10) bx = parseFloat(t.value);
+		else if (t.code === 20) by = parseFloat(t.value);
+		else if (t.code === 11) dx = parseFloat(t.value);
+		else if (t.code === 21) dy = parseFloat(t.value);
+		else if (t.code === 8) layer = t.value;
+		else if (t.code === 62) colorIndex = parseInt(t.value, 10);
+	}
+	if (bx === undefined || by === undefined || dx === undefined || dy === undefined) return null;
+	if ([bx, by, dx, dy].some((n) => Number.isNaN(n))) return null;
+	if (Math.hypot(dx, dy) < 1e-12) return null;
+	return { base: { x: bx, y: by }, dir: { x: dx, y: dy }, layer, colorIndex };
 }
 
 function readLayer(tags: DxfTag[], range: TagRange): string {

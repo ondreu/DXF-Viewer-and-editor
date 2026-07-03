@@ -17,7 +17,7 @@ import {
 	ChangeColorCommand,
 	DeleteCommand,
 } from "../core/command/commands";
-import { circumcircle, angleInArc, isCuttingEdgeType, computeFillet, computeChamfer, trimLinePoint, extendLinePoint, trimArcAngle, entityArea, joinLineChain, ellipsePoints, buildLinearDimension, applyOrtho, isFullEllipseSweep, hatchLines, type FilletResult } from "../core/geom/geometry2d";
+import { circumcircle, angleInArc, isCuttingEdgeType, computeFillet, computeChamfer, trimLinePoint, extendLinePoint, trimArcAngle, entityArea, joinLineChain, ellipsePoints, buildLinearDimension, applyOrtho, isFullEllipseSweep, hatchLines, constructionLineSegment, type FilletResult } from "../core/geom/geometry2d";
 import { entitiesInRect } from "../render/picking";
 
 /** Prompt for a number via the shared text modal; returns null if cancelled or unparsable. */
@@ -85,6 +85,7 @@ function outlineRotated(e: RenderEntity, pivot: Point2, deg: number, color: numb
 	if (e.type === "ARC") return arcOutline(rot(e.center), e.radius, e.startAngle + deg, e.endAngle + deg, color);
 	if (e.type === "ELLIPSE") return [{ kind: "line", pts: ellipsePoints(rot(e.center), rot(e.majorAxisEndpoint), e.ratio, e.startAngle, e.endAngle), color, dashed: true }];
 	if (e.type === "TEXT" || e.type === "MTEXT") return [{ kind: "marker", at: rot(e.position), style: "square", color, sizePx: 6 }];
+	if (e.type === "XLINE" || e.type === "RAY") return [constructionOutline(rot(e.basePoint), rot(e.through), e.type === "RAY", color)];
 	return [];
 }
 
@@ -97,6 +98,7 @@ function outlineScaled(e: RenderEntity, pivot: Point2, factor: number, color: nu
 	if (e.type === "ARC") return arcOutline(scale(e.center), e.radius * factor, e.startAngle, e.endAngle, color);
 	if (e.type === "ELLIPSE") return [{ kind: "line", pts: ellipsePoints(scale(e.center), scale(e.majorAxisEndpoint), e.ratio, e.startAngle, e.endAngle), color, dashed: true }];
 	if (e.type === "TEXT" || e.type === "MTEXT") return [{ kind: "marker", at: scale(e.position), style: "square", color, sizePx: 6 }];
+	if (e.type === "XLINE" || e.type === "RAY") return [constructionOutline(scale(e.basePoint), scale(e.through), e.type === "RAY", color)];
 	return [];
 }
 
@@ -125,6 +127,7 @@ function outlineMirrored(e: RenderEntity, a: Point2, b: Point2, color: number): 
 	}
 	if (e.type === "ELLIPSE") return [{ kind: "line", pts: ellipsePoints(refl(e.center), refl(e.majorAxisEndpoint), e.ratio, e.startAngle, e.endAngle), color, dashed: true }];
 	if (e.type === "TEXT" || e.type === "MTEXT") return [{ kind: "marker", at: refl(e.position), style: "square", color, sizePx: 6 }];
+	if (e.type === "XLINE" || e.type === "RAY") return [constructionOutline(refl(e.basePoint), refl(e.through), e.type === "RAY", color)];
 	return [];
 }
 
@@ -155,12 +158,25 @@ function gripsOf(e: RenderEntity): Grip[] {
 				{ mode: "whole", point: e.center },
 				{ mode: "vertex", pairIndex: 1, point: e.majorAxisEndpoint },
 			];
+		case "XLINE":
+		case "RAY":
+			// Base point moves the whole line (keeping direction); the through point
+			// reorients it about the base.
+			return [
+				{ mode: "whole", point: e.basePoint },
+				{ mode: "vertex", pairIndex: 1, point: e.through },
+			];
 		case "TEXT":
 		case "MTEXT":
 			return [{ mode: "whole", point: e.position }];
 		default:
 			return [];
 	}
+}
+
+/** Dashed preview of a construction line through two absolute points. */
+function constructionOutline(base: Point2, through: Point2, ray: boolean, color?: number): OverlayPrim {
+	return { kind: "line", pts: constructionLineSegment(base, through, ray), color, dashed: true };
 }
 
 /**
@@ -473,6 +489,8 @@ function outlineTranslated(e: RenderEntity, dx: number, dy: number): OverlayPrim
 	}
 	if (e.type === "TEXT" || e.type === "MTEXT")
 		return [{ kind: "marker", at: { x: e.position.x + dx, y: e.position.y + dy }, style: "square", sizePx: 6 }];
+	if (e.type === "XLINE" || e.type === "RAY")
+		return [constructionOutline({ x: e.basePoint.x + dx, y: e.basePoint.y + dy }, { x: e.through.x + dx, y: e.through.y + dy }, e.type === "RAY")];
 	return [];
 }
 
@@ -493,6 +511,12 @@ function outlineWithVertex(e: RenderEntity, pairIndex: number, np: Point2): Over
 	}
 	if (e.type === "ELLIPSE" && pairIndex === 1) {
 		return [{ kind: "line", pts: ellipsePoints(e.center, np, e.ratio, e.startAngle, e.endAngle), dashed: true }];
+	}
+	if (e.type === "XLINE" || e.type === "RAY") {
+		// pair 0 = base (moves the line), pair 1 = through (reorients it).
+		const base = pairIndex === 0 ? np : e.basePoint;
+		const through = pairIndex === 1 ? np : e.through;
+		return [constructionOutline(base, through, e.type === "RAY")];
 	}
 	return [];
 }
@@ -1196,6 +1220,82 @@ export class DrawEllipseTool implements Tool {
 }
 
 /**
+ * Draw a construction line — an infinite XLINE or a semi-infinite RAY. Click a
+ * base point, then a second point setting the direction (ortho assists straight
+ * runs). Stored as a base point plus a unit direction vector; rendered as a
+ * (semi-)infinite guide used mainly as an intersection-snap target.
+ */
+abstract class DrawConstructionLineTool implements Tool {
+	readonly panWithLeftDrag = false;
+	abstract readonly id: ToolId;
+	protected abstract readonly ray: boolean;
+	protected abstract readonly specType: "XLINE" | "RAY";
+	private base: Point2 | null = null;
+	constructor(protected ctx: ToolContext) {}
+	deactivate(): void {
+		this.reset();
+	}
+	pointer(phase: string, world: Point2): void {
+		const { p: snapped, prim } = snapMarker(this.ctx, world);
+		const p = this.base ? orthoConstrain(this.ctx, this.base, snapped) : snapped;
+		if (phase === "down") {
+			if (!this.base) {
+				this.base = p;
+			} else {
+				if (dist(this.base, p) > 1e-9) this.commit(this.base, p);
+				this.base = null;
+			}
+		}
+		const prims: OverlayPrim[] = [];
+		if (this.base && dist(this.base, p) > 1e-9) {
+			prims.push(constructionOutline(this.base, p, this.ray, this.ctx.accent));
+			prims.push({ kind: "marker", at: this.base, style: "square", color: this.ctx.accent, sizePx: 5 });
+			const angle = norm360((Math.atan2(p.y - this.base.y, p.x - this.base.x) * 180) / Math.PI);
+			prims.push({ kind: "label", at: p, text: `${angle.toFixed(1)}°`, color: this.ctx.accent });
+		} else if (this.base) {
+			prims.push({ kind: "marker", at: this.base, style: "square", color: this.ctx.accent, sizePx: 5 });
+		}
+		if (prim) prims.push(prim);
+		this.ctx.setOverlay(prims);
+	}
+	private commit(base: Point2, through: Point2): void {
+		const spec: NewEntitySpec = { type: this.specType, layer: this.ctx.activeLayer(), basePoint: base, through };
+		const c = this.ctx.activeColor();
+		if (c !== null) spec.colorNumber = c;
+		this.ctx.execute(new AddEntityCommand(spec));
+	}
+	key(ev: KeyboardEvent): boolean {
+		if (ev.key === "Escape") {
+			this.reset();
+			return true;
+		}
+		return false;
+	}
+	private reset(): void {
+		this.base = null;
+		this.ctx.setOverlay([]);
+	}
+	hint(): string {
+		if (this.base) return "Click a second point to set the direction (near 0/90/180/270° snaps straight) · Esc to cancel";
+		return this.ray
+			? "Click the ray's start point, then a point along it · Esc to cancel"
+			: "Click two points the construction line passes through · Esc to cancel";
+	}
+}
+
+export class DrawXLineTool extends DrawConstructionLineTool {
+	readonly id: ToolId = "draw-xline";
+	protected readonly ray = false;
+	protected readonly specType = "XLINE" as const;
+}
+
+export class DrawRayTool extends DrawConstructionLineTool {
+	readonly id: ToolId = "draw-ray";
+	protected readonly ray = true;
+	protected readonly specType = "RAY" as const;
+}
+
+/**
  * Rotate the current selection: click a pivot, then move/click to turn. The angle
  * is measured from the pivot→first-move direction so you can grab and spin.
  */
@@ -1446,6 +1546,7 @@ function highlightEntity(e: RenderEntity, color: number): OverlayPrim[] {
 	if (e.type === "ARC") return arcOutline(e.center, e.radius, e.startAngle, e.endAngle, color);
 	if (e.type === "ELLIPSE") return [{ kind: "line", pts: ellipsePoints(e.center, e.majorAxisEndpoint, e.ratio, e.startAngle, e.endAngle), color }];
 	if (e.type === "TEXT" || e.type === "MTEXT") return [{ kind: "marker", at: e.position, style: "square", color, sizePx: 7 }];
+	if (e.type === "XLINE" || e.type === "RAY") return [{ kind: "line", pts: constructionLineSegment(e.basePoint, e.through, e.type === "RAY"), color }];
 	return [];
 }
 
@@ -2636,6 +2737,8 @@ export function createTools(ctx: ToolContext): Record<ToolId, Tool> {
 		"draw-arc": new DrawArcTool(ctx),
 		"draw-arc-3p": new DrawArc3PTool(ctx),
 		"draw-ellipse": new DrawEllipseTool(ctx),
+		"draw-xline": new DrawXLineTool(ctx),
+		"draw-ray": new DrawRayTool(ctx),
 		"draw-polyline": new DrawPolylineTool(ctx),
 		"draw-rectangle": new DrawRectangleTool(ctx),
 		"draw-polygon": new DrawPolygonTool(ctx),

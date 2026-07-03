@@ -32,6 +32,8 @@ export type EntityType =
 	| "TEXT"
 	| "MTEXT"
 	| "INSERT"
+	| "XLINE"
+	| "RAY"
 	| "UNSUPPORTED";
 
 /** Entity types the v1 editor may mutate (design doc §8.2). */
@@ -43,6 +45,8 @@ export const EDITABLE_TYPES: ReadonlySet<EntityType> = new Set<EntityType>([
 	"LWPOLYLINE",
 	"HATCH",
 	"TEXT",
+	"XLINE",
+	"RAY",
 ]);
 
 export interface BaseEntity {
@@ -95,6 +99,23 @@ export interface EllipseEntity extends BaseEntity {
 	endAngle: number;
 }
 
+/**
+ * A construction line: an infinite line (XLINE) or a semi-infinite ray (RAY).
+ * DXF stores group 10/20 as a base point (absolute) and group 11/21 as a unit
+ * *direction vector* relative to it. Like ELLIPSE's major-axis endpoint, the
+ * direction is kept here as an absolute `through` point (`basePoint` + direction)
+ * so every generic edit (move/rotate/grip-drag) treats it as a plain vertex; the
+ * relative direction vector DXF actually stores is only recomputed at the
+ * serialization boundary (see `entityToTags`) and left untouched by a
+ * whole-entity translate (see `DxfDocument.patchTags`).
+ */
+export interface ConstructionLineEntity extends BaseEntity {
+	type: "XLINE" | "RAY";
+	basePoint: Point2;
+	/** Absolute point along the line's direction (basePoint + direction). */
+	through: Point2;
+}
+
 export interface PolylineEntity extends BaseEntity {
 	type: "LWPOLYLINE" | "POLYLINE";
 	vertices: Point2[];
@@ -144,6 +165,7 @@ export type RenderEntity =
 	| HatchEntity
 	| TextEntity
 	| InsertEntity
+	| ConstructionLineEntity
 	| UnsupportedEntity;
 
 export interface LayerInfo {
@@ -190,4 +212,5 @@ export type NewEntitySpec =
 	| { type: "ELLIPSE"; layer: string; colorNumber?: number; center: Point2; majorAxisEndpoint: Point2; ratio: number; startAngle?: number; endAngle?: number }
 	| { type: "LWPOLYLINE"; layer: string; colorNumber?: number; vertices: Point2[]; closed: boolean }
 	| { type: "HATCH"; layer: string; colorNumber?: number; vertices: Point2[] }
-	| { type: "TEXT"; layer: string; colorNumber?: number; position: Point2; height: number; text: string; rotation?: number };
+	| { type: "TEXT"; layer: string; colorNumber?: number; position: Point2; height: number; text: string; rotation?: number }
+	| { type: "XLINE" | "RAY"; layer: string; colorNumber?: number; basePoint: Point2; through: Point2 };
