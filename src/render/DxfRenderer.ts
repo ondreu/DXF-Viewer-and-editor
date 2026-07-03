@@ -17,6 +17,9 @@ import {
 	Mesh,
 	PlaneGeometry,
 	DoubleSide,
+	Shape,
+	ShapeGeometry,
+	Vector2,
 } from "three";
 import type { DxfDocument } from "../core/model/DxfDocument";
 import type { RenderEntity, Point2 } from "../core/model/types";
@@ -40,6 +43,9 @@ export interface ToolPointerHandler {
 const PICK_PIXELS = 8;
 const ARC_STEPS = 64;
 const GRID_TARGET_PX = 80;
+/** Crossing-select box colour (green, CAD convention) — independent of theme so
+ * it reads distinctly from the accent-coloured "window" box in any theme. */
+const CROSSING_COLOR = 0x3fb950;
 
 /**
  * Framework-agnostic 2D DXF renderer over three.js (design doc §3). Owns the
@@ -415,7 +421,7 @@ export class DxfRenderer {
 	}
 
 	private buildOverlayPrim(prim: OverlayPrim): Object3D | null {
-		const color = prim.color ?? this.theme.accent;
+		const color = "color" in prim ? prim.color ?? this.theme.accent : this.theme.accent;
 		switch (prim.kind) {
 			case "line": {
 				const arr: number[] = [];
@@ -434,7 +440,54 @@ export class DxfRenderer {
 				return this.overlayMarker(prim.at, prim.style, color, prim.sizePx ?? 6);
 			case "label":
 				return this.overlayLabel(prim.at, prim.text, color, prim.background);
+			case "rect":
+				return this.overlayRect(prim.a, prim.b, prim.mode);
+			case "polygon":
+				return this.overlayPolygon(prim.pts, color, prim.opacity ?? 0.28);
 		}
+	}
+
+	private overlayPolygon(pts: Point2[], color: number, opacity: number): Object3D | null {
+		if (pts.length < 3) return null;
+		const shape = new Shape(pts.map((p) => new Vector2(p.x, p.y)));
+		const geom = new ShapeGeometry(shape);
+		const mat = new MeshBasicMaterial({ color, transparent: true, opacity, side: DoubleSide, depthTest: false });
+		const mesh = new Mesh(geom, mat);
+		mesh.position.z = -1;
+		return mesh;
+	}
+
+	private overlayRect(a: Point2, b: Point2, mode: "window" | "crossing"): Object3D {
+		const minX = Math.min(a.x, b.x), maxX = Math.max(a.x, b.x);
+		const minY = Math.min(a.y, b.y), maxY = Math.max(a.y, b.y);
+		const color = mode === "window" ? this.theme.accent : CROSSING_COLOR;
+		const group = new Group();
+
+		const w = Math.max(maxX - minX, 1e-6);
+		const h = Math.max(maxY - minY, 1e-6);
+		const fillGeom = new PlaneGeometry(w, h);
+		const fillMat = new MeshBasicMaterial({ color, transparent: true, opacity: 0.12, depthTest: false });
+		const fill = new Mesh(fillGeom, fillMat);
+		fill.position.set((minX + maxX) / 2, (minY + maxY) / 2, -1);
+		group.add(fill);
+
+		const pts = [
+			{ x: minX, y: minY },
+			{ x: maxX, y: minY },
+			{ x: maxX, y: maxY },
+			{ x: minX, y: maxY },
+		];
+		const arr: number[] = [];
+		for (const p of pts) arr.push(p.x, p.y, 0);
+		const geom = new BufferGeometry().setAttribute("position", new Float32BufferAttribute(arr, 3));
+		const dashed = mode === "crossing";
+		const mat = dashed
+			? new LineDashedMaterial({ color, dashSize: 6 * this.unitsPerPixel, gapSize: 4 * this.unitsPerPixel })
+			: new LineBasicMaterial({ color });
+		const border = new LineLoop(geom, mat);
+		if (dashed) border.computeLineDistances();
+		group.add(border);
+		return group;
 	}
 
 	private overlayMarker(at: Point2, style: string, color: number, sizePx: number): Object3D {

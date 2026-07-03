@@ -28,6 +28,8 @@ export interface SnapSettings {
 	extension: boolean;
 	grid: boolean;
 	gridSpacing: number;
+	/** hard-lock new line/polyline segments to 0/90/180/270° while drawing (CAD "ortho") */
+	ortho: boolean;
 }
 
 export const DEFAULT_SNAP: SnapSettings = {
@@ -40,6 +42,7 @@ export const DEFAULT_SNAP: SnapSettings = {
 	extension: true,
 	grid: false,
 	gridSpacing: 1,
+	ortho: false,
 };
 
 // Priority: object snaps beat grid, and precise features beat "nearest".

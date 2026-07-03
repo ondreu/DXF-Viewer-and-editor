@@ -63,6 +63,30 @@ export function entityArea(e: RenderEntity): { area: number; perimeter: number }
 }
 
 /** True when a start/end sweep (deg) describes a full ellipse rather than a partial arc. */
+/**
+ * Constrain `to` to the nearest multiple of `incrementDeg` (default 90° — the
+ * classic CAD "ortho" 0/90/180/270 directions) measured from `from`, keeping
+ * the same distance. If `thresholdDeg` is given, the constraint only kicks in
+ * when the raw angle is already within that many degrees of a multiple —
+ * a soft "angle assist" that snaps a nearly-straight line without forcing
+ * every line to be axis-aligned; omit it for a hard/always-on lock.
+ */
+export function applyOrtho(from: Point2, to: Point2, incrementDeg = 90, thresholdDeg?: number): Point2 {
+	const dx = to.x - from.x, dy = to.y - from.y;
+	const d = Math.hypot(dx, dy);
+	if (d < 1e-9) return to;
+	const rawDeg = (Math.atan2(dy, dx) * 180) / Math.PI;
+	const nearestDeg = Math.round(rawDeg / incrementDeg) * incrementDeg;
+	if (thresholdDeg !== undefined && Math.abs(norm180(rawDeg - nearestDeg)) > thresholdDeg) return to;
+	const rad = (nearestDeg * Math.PI) / 180;
+	return { x: from.x + d * Math.cos(rad), y: from.y + d * Math.sin(rad) };
+}
+
+function norm180(deg: number): number {
+	const d = norm360(deg + 180) - 180;
+	return d;
+}
+
 export function isFullEllipseSweep(startDeg: number, endDeg: number): boolean {
 	return Math.abs(norm360(endDeg - startDeg)) < 1e-6;
 }

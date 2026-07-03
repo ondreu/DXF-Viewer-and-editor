@@ -115,6 +115,12 @@ export class AnnotationStore {
 					}
 					prims.push({ kind: "label", at: a.points[a.points.length - 1] ?? { x: 0, y: 0 }, text: measureLabel(a.data), color: c });
 					break;
+				case "fill":
+					if (a.points.length >= 3) {
+						prims.push({ kind: "polygon", pts: a.points, color: c, opacity: a.opacity ?? 0.3 });
+						prims.push({ kind: "line", pts: a.points, color: c, closed: true });
+					}
+					break;
 			}
 		}
 		return prims;

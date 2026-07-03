@@ -55,6 +55,8 @@ export type ControllerEvents = { state: ControllerState };
 export interface ViewControllerOptions {
 	theme: Partial<RenderTheme>;
 	promptText: (initial: string, title?: string) => Promise<string | null>;
+	/** live getter so a settings change while the view is open takes effect immediately */
+	toolStickiness?: () => "sticky" | "auto-select";
 }
 
 /**
@@ -82,11 +84,13 @@ export class ViewController {
 	private measurement: Measurement | null = null;
 	private toolOverlay: Overlay = [];
 	private promptText: (initial: string, title?: string) => Promise<string | null>;
+	private toolStickiness: () => "sticky" | "auto-select";
 
 	constructor(container: HTMLElement, opts: ViewControllerOptions) {
 		this.renderer = new DxfRenderer(container, opts.theme);
 		this.accent = (opts.theme.accent as number) ?? 0x7f6df2;
 		this.promptText = opts.promptText;
+		this.toolStickiness = opts.toolStickiness ?? (() => "sticky");
 
 		this.tools = new ToolManager(this.buildToolContext(), this.renderer, () => this.emit());
 		this.annotations.events.on("change", () => {
@@ -99,11 +103,15 @@ export class ViewController {
 		return {
 			doc: () => this.doc,
 			snap: (world) => this.snapAt(world),
+			orthoEnabled: () => this.snapSettings.ortho,
 			pick: (world) => this.renderer.pickAt(world),
 			execute: (cmd: Command) => {
 				this.stack?.execute(cmd);
 				this.renderer.rebuild();
 				this.syncAttachedAnnotations();
+				// "auto-select" stickiness: hand control back to Select as soon as a
+				// tool finishes a discrete action, instead of staying on the tool.
+				if (this.toolStickiness() === "auto-select" && this.tools.activeId !== "select") this.tools.setActive("select");
 				this.emit();
 			},
 			select: (id) => this.setSelectionIds(id ? [id] : []),

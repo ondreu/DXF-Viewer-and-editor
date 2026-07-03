@@ -18,7 +18,8 @@ import {
 	DeleteCommand,
 } from "../core/command/commands";
 import { AnnotationStore } from "../core/annotation/AnnotationStore";
-import { circumcircle, angleInArc, isCuttingEdgeType, computeFillet, computeChamfer, trimLinePoint, extendLinePoint, trimArcAngle, entityArea, joinLineChain, ellipsePoints, buildLinearDimension } from "../core/geom/geometry2d";
+import { circumcircle, angleInArc, isCuttingEdgeType, computeFillet, computeChamfer, trimLinePoint, extendLinePoint, trimArcAngle, entityArea, joinLineChain, ellipsePoints, buildLinearDimension, applyOrtho, isFullEllipseSweep, type FilletResult } from "../core/geom/geometry2d";
+import { entitiesInRect } from "../render/picking";
 
 /** Prompt for a number via the shared text modal; returns null if cancelled or unparsable. */
 async function promptNumber(ctx: ToolContext, title: string, initial: number): Promise<number | null> {
@@ -180,11 +181,13 @@ export class SelectTool implements Tool {
 		/** reference point that OSNAP targets snap onto during the move */
 		basePoint: Point2;
 	} = null;
+	/** rubber-band drag in progress: start corner + the modifier keys held at press time */
+	private box: { start: Point2; add: boolean } | null = null;
 
 	constructor(private ctx: ToolContext) {}
 
 	pointer(phase: string, world: Point2, ev?: PointerEvent): boolean | void {
-		if (phase === "down") return this.onDown(world);
+		if (phase === "down") return this.onDown(world, ev);
 		if (phase === "move") return this.onMove(world, ev);
 		if (phase === "up") return this.onUp(world);
 		if (phase === "click") {
@@ -205,7 +208,7 @@ export class SelectTool implements Tool {
 		return { dx: target.x - basePoint.x, dy: target.y - basePoint.y, target };
 	}
 
-	private onDown(world: Point2): boolean {
+	private onDown(world: Point2, ev?: PointerEvent): boolean {
 		const doc = this.ctx.doc();
 		if (!doc) return false;
 
@@ -261,10 +264,29 @@ export class SelectTool implements Tool {
 				}
 			}
 		}
+
+		// 4. nothing grabbed: on a mouse/pen a left-drag from empty space starts a
+		// rubber-band selection (CAD-style window/crossing box); touch keeps its
+		// simpler pan-to-scroll gesture since there's no reliable modifier key.
+		if (ev && ev.pointerType !== "touch") {
+			this.box = { start: world, add: ev.ctrlKey || ev.metaKey };
+			return true;
+		}
 		return false; // let the renderer pan / click-to-select
 	}
 
 	private onMove(world: Point2, ev?: PointerEvent): void {
+		if (this.box) {
+			if (ev && ev.buttons === 0) {
+				// pointer released outside; treat as cancel
+				this.box = null;
+				this.ctx.setOverlay([]);
+				return;
+			}
+			const mode = world.x >= this.box.start.x ? "window" : "crossing";
+			this.ctx.setOverlay([{ kind: "rect", a: this.box.start, b: world, mode }]);
+			return;
+		}
 		if (!this.drag) {
 			// hover: show grips of the selected entity so it's clear it can be edited
 			this.showGrips();
@@ -300,6 +322,37 @@ export class SelectTool implements Tool {
 	}
 
 	private onUp(world: Point2): void {
+		const box = this.box;
+		this.box = null;
+		if (box) {
+			this.ctx.setOverlay([]);
+			if (dist(box.start, world) < this.ctx.pixelSize() * 3) {
+				// negligible drag: treat as a plain click (select/deselect at the point)
+				const id = this.ctx.pick(world);
+				if (box.add) this.ctx.toggleSelection(id);
+				else this.ctx.select(id);
+				this.showGrips();
+				return;
+			}
+			const doc = this.ctx.doc();
+			if (doc) {
+				const rect = {
+					minX: Math.min(box.start.x, world.x), maxX: Math.max(box.start.x, world.x),
+					minY: Math.min(box.start.y, world.y), maxY: Math.max(box.start.y, world.y),
+				};
+				const mode = world.x >= box.start.x ? "window" as const : "crossing" as const;
+				const hits = entitiesInRect(doc.entities, rect, mode, (id) => doc.isHidden(id));
+				if (box.add) {
+					const merged = new Set(this.ctx.selectedIds());
+					for (const id of hits) merged.add(id);
+					this.ctx.selectMany([...merged]);
+				} else {
+					this.ctx.selectMany(hits);
+				}
+			}
+			this.showGrips();
+			return;
+		}
 		const d = this.drag;
 		this.drag = null;
 		if (!d) return;
@@ -349,11 +402,12 @@ export class SelectTool implements Tool {
 
 	deactivate(): void {
 		this.drag = null;
+		this.box = null;
 		this.ctx.setOverlay([]);
 	}
 
 	hint(): string {
-		return "Click to select · Ctrl/Cmd+click to add · drag a grip or body to move (snaps) · drag empty space to pan";
+		return "Click to select · Ctrl/Cmd+click to add · drag a grip or body to move (snaps) · drag empty space for a select box (left-right = window, right-left = crossing)";
 	}
 }
 
@@ -628,6 +682,13 @@ export class MeasurePointTool implements Tool {
 
 // -- drawing (writes real DXF entities) --------------------------------------
 
+/** Apply ortho: hard-lock to 0/90/180/270° when the toggle is on, or a soft
+ * "angle assist" snap when the raw direction is already close to one of those
+ * (so straight lines are easy to draw without forcing every line axis-aligned). */
+function orthoConstrain(ctx: ToolContext, from: Point2, to: Point2): Point2 {
+	return applyOrtho(from, to, 90, ctx.orthoEnabled() ? 180 : 2.5);
+}
+
 export class DrawLineTool implements Tool {
 	readonly id: ToolId = "draw-line";
 	readonly panWithLeftDrag = false;
@@ -637,7 +698,8 @@ export class DrawLineTool implements Tool {
 		this.reset();
 	}
 	pointer(phase: string, world: Point2): void {
-		const { p, prim } = snapMarker(this.ctx, world);
+		const { p: snapped, prim } = snapMarker(this.ctx, world);
+		const p = this.start ? orthoConstrain(this.ctx, this.start, snapped) : snapped;
 		if (phase === "down") {
 			if (!this.start) this.start = p;
 			else {
@@ -647,8 +709,9 @@ export class DrawLineTool implements Tool {
 		}
 		const prims: OverlayPrim[] = [];
 		if (this.start) {
+			const angle = norm360((Math.atan2(p.y - this.start.y, p.x - this.start.x) * 180) / Math.PI);
 			prims.push({ kind: "line", pts: [this.start, p], color: this.ctx.accent });
-			prims.push({ kind: "label", at: p, text: dist(this.start, p).toFixed(3), color: this.ctx.accent });
+			prims.push({ kind: "label", at: p, text: `${dist(this.start, p).toFixed(3)} @ ${angle.toFixed(1)}°`, color: this.ctx.accent });
 		}
 		if (prim) prims.push(prim);
 		this.ctx.setOverlay(prims);
@@ -664,14 +727,32 @@ export class DrawLineTool implements Tool {
 			this.reset();
 			return true;
 		}
+		if (ev.key === "Enter" && this.start) {
+			void this.typeExact();
+			return true;
+		}
 		return false;
+	}
+	/** Type an exact angle + length instead of clicking the end point. */
+	private async typeExact(): Promise<void> {
+		const start = this.start;
+		if (!start) return;
+		const angle = await promptNumber(this.ctx, "Angle (degrees, 0 = +X, CCW)", 0);
+		if (angle === null) return;
+		const length = await promptNumber(this.ctx, "Length", 10);
+		if (length === null || length <= 0) return;
+		const rad = (angle * Math.PI) / 180;
+		this.commit(start, { x: start.x + length * Math.cos(rad), y: start.y + length * Math.sin(rad) });
+		this.reset();
 	}
 	private reset(): void {
 		this.start = null;
 		this.ctx.setOverlay([]);
 	}
 	hint(): string {
-		return "Click start and end points · Esc to cancel";
+		return this.start
+			? "Click the end point (near 0/90/180/270° snaps straight) · Enter to type an exact angle/length · Esc to cancel"
+			: "Click start and end points · Esc to cancel";
 	}
 }
 
@@ -1267,49 +1348,168 @@ export class CopyTool implements Tool {
 	}
 }
 
-/** Round a corner between two LINEs: click both, then set a radius. Trims both lines
- * to the tangent points and connects them with an ARC. */
+/** Solid, undashed outline of an entity in `color` — used to highlight whatever
+ * is under the cursor so a tool's pick target is never a guessing game. */
+function highlightEntity(e: RenderEntity, color: number): OverlayPrim[] {
+	const pts = outlinePoints(e);
+	if (pts) return [{ kind: "line", pts, color }];
+	if (e.type === "CIRCLE") return [{ kind: "circle", center: e.center, radius: e.radius, color }];
+	if (e.type === "ARC") return arcOutline(e.center, e.radius, e.startAngle, e.endAngle, color);
+	if (e.type === "ELLIPSE") return [{ kind: "line", pts: ellipsePoints(e.center, e.majorAxisEndpoint, e.ratio, e.startAngle, e.endAngle), color }];
+	if (e.type === "TEXT" || e.type === "MTEXT") return [{ kind: "marker", at: e.position, style: "square", color, sizePx: 7 }];
+	return [];
+}
+
+/** Segments of a polyline's edges (with the closing edge if `closed`). */
+function polylineSegments(e: { vertices: Point2[]; closed: boolean }): [Point2, Point2][] {
+	const v = e.vertices;
+	const segs: [Point2, Point2][] = [];
+	for (let i = 0; i < v.length - 1; i++) segs.push([v[i], v[i + 1]]);
+	if (e.closed && v.length > 2) segs.push([v[v.length - 1], v[0]]);
+	return segs;
+}
+
+/** One side of a fillet/chamfer corner: either a whole LINE, or one edge of an
+ * editable LWPOLYLINE (picked as the segment nearest the click). Letting a
+ * polyline edge stand in for a LINE is what makes filleting a drawn rectangle's
+ * corner work, since a rectangle is one LWPOLYLINE rather than four LINEs. */
+interface CornerPick {
+	lineLike: { start: Point2; end: Point2 };
+	source: { kind: "line"; id: string } | { kind: "poly"; id: string; segIndex: number };
+}
+
+function pickCorner(ctx: ToolContext, world: Point2): CornerPick | null {
+	const doc = ctx.doc();
+	const id = ctx.pick(world);
+	if (!doc || !id || !doc.isEditable(id)) return null;
+	const e = doc.getEntity(id);
+	if (!e) return null;
+	if (e.type === "LINE") return { lineLike: { start: e.start, end: e.end }, source: { kind: "line", id } };
+	if (e.type === "LWPOLYLINE") {
+		const segs = polylineSegments(e);
+		let best = -1;
+		let bestD = Infinity;
+		segs.forEach(([a, b], i) => {
+			const d = dist(world, nearestPointOnSegment(world, a, b));
+			if (d < bestD) {
+				bestD = d;
+				best = i;
+			}
+		});
+		if (best < 0) return null;
+		return { lineLike: { start: segs[best][0], end: segs[best][1] }, source: { kind: "poly", id, segIndex: best } };
+	}
+	return null;
+}
+
+function sameEdge(a: CornerPick["source"], b: CornerPick["source"]): boolean {
+	if (a.id !== b.id) return false;
+	if (a.kind === "line" || b.kind === "line") return a.kind === b.kind;
+	return a.segIndex === b.segIndex;
+}
+
+/** Rebuild a LWPOLYLINE as individual LINE entities (deleting the polyline),
+ * applying any corner trims computed for its segments. A polyline can't hold a
+ * curved (fillet) or independently-shortened (chamfer) corner, so touching one
+ * of its edges explodes the whole thing into LINEs — same shape, editable corner. */
+function explodeWithTrims(e: RenderEntity, trims: Map<number, { isStart: boolean; point: Point2 }>): Command[] {
+	if (e.type !== "LWPOLYLINE") return [];
+	const cmds: Command[] = [new DeleteCommand(e.id)];
+	polylineSegments(e).forEach(([a, b], i) => {
+		const t = trims.get(i);
+		const start = t && t.isStart ? t.point : a;
+		const end = t && !t.isStart ? t.point : b;
+		const spec: NewEntitySpec = { type: "LINE", layer: e.layer, start, end };
+		if (e.colorNumber !== undefined) spec.colorNumber = e.colorNumber;
+		cmds.push(new AddEntityCommand(spec));
+	});
+	return cmds;
+}
+
+/** Commands for a fillet (`isFillet`, `amount` = radius) or chamfer (`amount` =
+ * distance) between two corner picks: trims each side back to the corner
+ * (moving a LINE's vertex, or exploding+trimming a polyline edge) and adds the
+ * connecting ARC or LINE. Null if the two sides don't form a usable corner
+ * (parallel, or the radius/distance doesn't fit). */
+function cornerCommands(ctx: ToolContext, pick1: CornerPick, click1: Point2, pick2: CornerPick, click2: Point2, isFillet: boolean, amount: number): Command[] | null {
+	const doc = ctx.doc();
+	if (!doc) return null;
+	const line1 = { start: pick1.lineLike.start, end: pick1.lineLike.end } as LineEntity;
+	const line2 = { start: pick2.lineLike.start, end: pick2.lineLike.end } as LineEntity;
+	const result = isFillet ? computeFillet(line1, click1, line2, click2, amount) : computeChamfer(line1, click1, line2, click2, amount);
+	if (!result) return null;
+
+	const cmds: Command[] = [];
+	const polyTrims = new Map<string, { entity: RenderEntity; trims: Map<number, { isStart: boolean; point: Point2 }> }>();
+	const applySide = (source: CornerPick["source"], pairIndex: 0 | 1, point: Point2) => {
+		if (source.kind === "line") {
+			const e = doc.getEntity(source.id);
+			if (!e || e.type !== "LINE") return;
+			const near = pairIndex === 0 ? e.start : e.end;
+			cmds.push(new MoveVertexCommand(source.id, pairIndex, point.x - near.x, point.y - near.y));
+		} else {
+			let g = polyTrims.get(source.id);
+			if (!g) {
+				const e = doc.getEntity(source.id);
+				if (!e) return;
+				g = { entity: e, trims: new Map() };
+				polyTrims.set(source.id, g);
+			}
+			g.trims.set(source.segIndex, { isStart: pairIndex === 0, point });
+		}
+	};
+	applySide(pick1.source, result.pair1, result.point1);
+	applySide(pick2.source, result.pair2, result.point2);
+	for (const g of polyTrims.values()) cmds.push(...explodeWithTrims(g.entity, g.trims));
+
+	const layer = doc.getEntity(pick1.source.id)?.layer ?? "0";
+	if (isFillet) {
+		if (amount > 1e-9) {
+			const fr = result as FilletResult;
+			cmds.push(new AddEntityCommand({ type: "ARC", layer, center: fr.center, radius: amount, startAngle: fr.startAngle, endAngle: fr.endAngle }));
+		}
+	} else {
+		cmds.push(new AddEntityCommand({ type: "LINE", layer, start: result.point1, end: result.point2 }));
+	}
+	return cmds;
+}
+
+/** Round a corner between two LINEs (or LWPOLYLINE edges — e.g. a drawn
+ * rectangle's corner): click both, then set a radius. Trims both sides to the
+ * tangent points and connects them with an ARC. */
 export class FilletTool implements Tool {
 	readonly id: ToolId = "fillet";
 	readonly panWithLeftDrag = false;
-	private first: { id: string; click: Point2 } | null = null;
+	private first: { pick: CornerPick; click: Point2 } | null = null;
 	private lastRadius = 5;
 	constructor(private ctx: ToolContext) {}
 	deactivate(): void {
 		this.reset();
 	}
 	pointer(phase: string, world: Point2): void {
-		if (phase !== "down") return;
-		const doc = this.ctx.doc();
-		const id = this.ctx.pick(world);
-		const e = id ? doc?.getEntity(id) : undefined;
+		if (phase !== "down") {
+			if (!this.first) {
+				const pick = pickCorner(this.ctx, world);
+				this.ctx.setOverlay(pick ? [{ kind: "line", pts: [pick.lineLike.start, pick.lineLike.end], color: this.ctx.accent }] : []);
+			}
+			return;
+		}
+		const pick = pickCorner(this.ctx, world);
 		if (!this.first) {
-			if (e && e.type === "LINE" && doc?.isEditable(id!)) {
-				this.first = { id: id!, click: world };
+			if (pick) {
+				this.first = { pick, click: world };
 				this.ctx.setOverlay([{ kind: "marker", at: world, style: "circle", color: this.ctx.accent, sizePx: 7 }]);
 			}
 			return;
 		}
-		if (!e || e.type !== "LINE" || id === this.first.id || !doc?.isEditable(id!)) return;
-		const line1 = doc.getEntity(this.first.id) as LineEntity;
-		const line2 = e;
-		const click1 = this.first.click;
+		if (!pick || sameEdge(pick.source, this.first.pick.source)) return;
+		const first = this.first;
 		this.reset();
 		void promptNumber(this.ctx, "Fillet radius", this.lastRadius).then((r) => {
 			if (r === null || r < 0) return;
 			this.lastRadius = r;
-			const result = computeFillet(line1, click1, line2, world, r);
-			if (!result) return;
-			const near1 = result.pair1 === 0 ? line1.start : line1.end;
-			const near2 = result.pair2 === 0 ? line2.start : line2.end;
-			const cmds: Command[] = [
-				new MoveVertexCommand(line1.id, result.pair1, result.point1.x - near1.x, result.point1.y - near1.y),
-				new MoveVertexCommand(line2.id, result.pair2, result.point2.x - near2.x, result.point2.y - near2.y),
-			];
-			if (r > 1e-9) {
-				cmds.push(new AddEntityCommand({ type: "ARC", layer: line1.layer, center: result.center, radius: r, startAngle: result.startAngle, endAngle: result.endAngle }));
-			}
-			this.ctx.execute(new BatchCommand(cmds, "Fillet"));
+			const cmds = cornerCommands(this.ctx, first.pick, first.click, pick, world, true, r);
+			if (cmds) this.ctx.execute(new BatchCommand(cmds, "Fillet"));
 		});
 	}
 	key(ev: KeyboardEvent): boolean {
@@ -1324,50 +1524,47 @@ export class FilletTool implements Tool {
 		this.ctx.setOverlay([]);
 	}
 	hint(): string {
-		return this.first ? "Click the second line to fillet · Esc to cancel" : "Click the first line to fillet";
+		return this.first
+			? "Click the second line (or polyline edge) to fillet · Esc to cancel"
+			: "Click the first line or polyline edge to fillet — the edge under the cursor is highlighted";
 	}
 }
 
-/** Bevel a corner between two LINEs: click both, then set an equal-distance chamfer. */
+/** Bevel a corner between two LINEs (or LWPOLYLINE edges): click both, then set
+ * an equal-distance chamfer. */
 export class ChamferTool implements Tool {
 	readonly id: ToolId = "chamfer";
 	readonly panWithLeftDrag = false;
-	private first: { id: string; click: Point2 } | null = null;
+	private first: { pick: CornerPick; click: Point2 } | null = null;
 	private lastDistance = 5;
 	constructor(private ctx: ToolContext) {}
 	deactivate(): void {
 		this.reset();
 	}
 	pointer(phase: string, world: Point2): void {
-		if (phase !== "down") return;
-		const doc = this.ctx.doc();
-		const id = this.ctx.pick(world);
-		const e = id ? doc?.getEntity(id) : undefined;
+		if (phase !== "down") {
+			if (!this.first) {
+				const pick = pickCorner(this.ctx, world);
+				this.ctx.setOverlay(pick ? [{ kind: "line", pts: [pick.lineLike.start, pick.lineLike.end], color: this.ctx.accent }] : []);
+			}
+			return;
+		}
+		const pick = pickCorner(this.ctx, world);
 		if (!this.first) {
-			if (e && e.type === "LINE" && doc?.isEditable(id!)) {
-				this.first = { id: id!, click: world };
+			if (pick) {
+				this.first = { pick, click: world };
 				this.ctx.setOverlay([{ kind: "marker", at: world, style: "circle", color: this.ctx.accent, sizePx: 7 }]);
 			}
 			return;
 		}
-		if (!e || e.type !== "LINE" || id === this.first.id || !doc?.isEditable(id!)) return;
-		const line1 = doc.getEntity(this.first.id) as LineEntity;
-		const line2 = e;
-		const click1 = this.first.click;
+		if (!pick || sameEdge(pick.source, this.first.pick.source)) return;
+		const first = this.first;
 		this.reset();
 		void promptNumber(this.ctx, "Chamfer distance", this.lastDistance).then((d) => {
 			if (d === null || d <= 0) return;
 			this.lastDistance = d;
-			const result = computeChamfer(line1, click1, line2, world, d);
-			if (!result) return;
-			const near1 = result.pair1 === 0 ? line1.start : line1.end;
-			const near2 = result.pair2 === 0 ? line2.start : line2.end;
-			const cmds: Command[] = [
-				new MoveVertexCommand(line1.id, result.pair1, result.point1.x - near1.x, result.point1.y - near1.y),
-				new MoveVertexCommand(line2.id, result.pair2, result.point2.x - near2.x, result.point2.y - near2.y),
-				new AddEntityCommand({ type: "LINE", layer: line1.layer, start: result.point1, end: result.point2 }),
-			];
-			this.ctx.execute(new BatchCommand(cmds, "Chamfer"));
+			const cmds = cornerCommands(this.ctx, first.pick, first.click, pick, world, false, d);
+			if (cmds) this.ctx.execute(new BatchCommand(cmds, "Chamfer"));
 		});
 	}
 	key(ev: KeyboardEvent): boolean {
@@ -1382,7 +1579,9 @@ export class ChamferTool implements Tool {
 		this.ctx.setOverlay([]);
 	}
 	hint(): string {
-		return this.first ? "Click the second line to chamfer · Esc to cancel" : "Click the first line to chamfer";
+		return this.first
+			? "Click the second line (or polyline edge) to chamfer · Esc to cancel"
+			: "Click the first line or polyline edge to chamfer — the edge under the cursor is highlighted";
 	}
 }
 
@@ -1400,28 +1599,67 @@ export class TrimTool implements Tool {
 		this.reset();
 	}
 	pointer(phase: string, world: Point2): void {
-		if (phase !== "down") return;
 		const doc = this.ctx.doc();
 		if (!doc) return;
 		if (!this.edgeId) {
 			const id = this.ctx.pick(world);
 			const e = id ? doc.getEntity(id) : undefined;
-			if (e && isCuttingEdgeType(e)) {
+			const eligible = e && isCuttingEdgeType(e);
+			if (phase !== "down") {
+				this.ctx.setOverlay(eligible ? highlightEntity(e!, this.ctx.accent) : []);
+				return;
+			}
+			if (eligible) {
 				this.edgeId = id;
-				this.ctx.setOverlay([{ kind: "marker", at: world, style: "x", color: this.ctx.accent, sizePx: 8 }]);
+				this.ctx.setOverlay(highlightEntity(e!, this.ctx.accent));
 			}
 			return;
 		}
+		const edge = doc.getEntity(this.edgeId);
+		if (!edge) {
+			this.reset();
+			return;
+		}
 		const id = this.ctx.pick(world);
+		if (phase !== "down") {
+			const prims = highlightEntity(edge, this.ctx.accent);
+			const target = id ? doc.getEntity(id) : undefined;
+			if (target && id && doc.isEditable(id)) {
+				if (target.type === "LINE") prims.push(...this.previewLine(target, edge, world));
+				else if (target.type === "ARC") prims.push(...this.previewArc(target, edge, world));
+			}
+			this.ctx.setOverlay(prims);
+			return;
+		}
 		if (id === this.edgeId) {
 			this.reset();
 			return;
 		}
-		const edge = doc.getEntity(this.edgeId);
 		const target = id ? doc.getEntity(id) : undefined;
-		if (!edge || !target || !id || !doc.isEditable(id)) return;
+		if (!target || !id || !doc.isEditable(id)) return;
 		if (target.type === "LINE") this.trimLine(target, edge, world);
 		else if (target.type === "ARC") this.trimArc(target, edge, world);
+	}
+	private previewLine(target: LineEntity, edge: RenderEntity, click: Point2): OverlayPrim[] {
+		const nearStart = dist(target.start, click) <= dist(target.end, click);
+		const near = nearStart ? target.start : target.end;
+		const far = nearStart ? target.end : target.start;
+		const point = trimLinePoint(far, near, edge);
+		if (!point) return [];
+		return [
+			{ kind: "line", pts: [near, point], color: this.ctx.accent, dashed: true },
+			{ kind: "marker", at: point, style: "x", color: this.ctx.accent, sizePx: 6 },
+		];
+	}
+	private previewArc(target: ArcEntity, edge: RenderEntity, click: Point2): OverlayPrim[] {
+		const sPt = { x: target.center.x + target.radius * Math.cos((target.startAngle * Math.PI) / 180), y: target.center.y + target.radius * Math.sin((target.startAngle * Math.PI) / 180) };
+		const ePt = { x: target.center.x + target.radius * Math.cos((target.endAngle * Math.PI) / 180), y: target.center.y + target.radius * Math.sin((target.endAngle * Math.PI) / 180) };
+		const nearIsEnd = dist(ePt, click) <= dist(sPt, click);
+		const angle = trimArcAngle(target.center, target.radius, target.startAngle, target.endAngle, nearIsEnd, edge);
+		if (angle === null) return [];
+		const removedStart = nearIsEnd ? angle : target.startAngle;
+		const removedEnd = nearIsEnd ? target.endAngle : angle;
+		return arcOutline(target.center, target.radius, removedStart, removedEnd, this.ctx.accent);
 	}
 	private trimLine(target: LineEntity, edge: RenderEntity, click: Point2): void {
 		const nearStart = dist(target.start, click) <= dist(target.end, click);
@@ -1451,7 +1689,9 @@ export class TrimTool implements Tool {
 		this.ctx.setOverlay([]);
 	}
 	hint(): string {
-		return this.edgeId ? "Click a LINE or ARC to trim it back to the cutting edge · Esc to pick a new edge" : "Click the cutting edge (LINE, CIRCLE, ARC or polyline)";
+		return this.edgeId
+			? "Click the excess part (near where you click) of a LINE or ARC that crosses the highlighted edge to trim it back · Esc to pick a new edge"
+			: "Click the cutting edge first (highlighted on hover) — a LINE, CIRCLE, ARC or polyline";
 	}
 }
 
@@ -1468,32 +1708,57 @@ export class ExtendTool implements Tool {
 		this.reset();
 	}
 	pointer(phase: string, world: Point2): void {
-		if (phase !== "down") return;
 		const doc = this.ctx.doc();
 		if (!doc) return;
 		if (!this.edgeId) {
 			const id = this.ctx.pick(world);
 			const e = id ? doc.getEntity(id) : undefined;
-			if (e && isCuttingEdgeType(e)) {
+			const eligible = e && isCuttingEdgeType(e);
+			if (phase !== "down") {
+				this.ctx.setOverlay(eligible ? highlightEntity(e!, this.ctx.accent) : []);
+				return;
+			}
+			if (eligible) {
 				this.edgeId = id;
-				this.ctx.setOverlay([{ kind: "marker", at: world, style: "x", color: this.ctx.accent, sizePx: 8 }]);
+				this.ctx.setOverlay(highlightEntity(e!, this.ctx.accent));
 			}
 			return;
 		}
+		const edge = doc.getEntity(this.edgeId);
+		if (!edge) {
+			this.reset();
+			return;
+		}
 		const id = this.ctx.pick(world);
+		if (phase !== "down") {
+			const prims = highlightEntity(edge, this.ctx.accent);
+			const target = id ? doc.getEntity(id) : undefined;
+			if (target && target.type === "LINE" && id && doc.isEditable(id)) {
+				const near = this.nearEnd(target, world);
+				const point = extendLinePoint(near.far, near.near, edge);
+				if (point) {
+					prims.push({ kind: "line", pts: [near.near, point], color: this.ctx.accent, dashed: true });
+					prims.push({ kind: "marker", at: point, style: "x", color: this.ctx.accent, sizePx: 6 });
+				}
+			}
+			this.ctx.setOverlay(prims);
+			return;
+		}
 		if (id === this.edgeId) {
 			this.reset();
 			return;
 		}
-		const edge = doc.getEntity(this.edgeId);
 		const target = id ? doc.getEntity(id) : undefined;
-		if (!edge || !target || !id || !doc.isEditable(id) || target.type !== "LINE") return;
-		const nearStart = dist(target.start, world) <= dist(target.end, world);
-		const near = nearStart ? target.start : target.end;
-		const far = nearStart ? target.end : target.start;
+		if (!target || !id || !doc.isEditable(id) || target.type !== "LINE") return;
+		const { near, far } = this.nearEnd(target, world);
 		const point = extendLinePoint(far, near, edge);
 		if (!point) return;
+		const nearStart = near === target.start;
 		this.ctx.execute(new MoveVertexCommand(target.id, nearStart ? 0 : 1, point.x - near.x, point.y - near.y));
+	}
+	private nearEnd(target: LineEntity, click: Point2): { near: Point2; far: Point2 } {
+		const nearStart = dist(target.start, click) <= dist(target.end, click);
+		return nearStart ? { near: target.start, far: target.end } : { near: target.end, far: target.start };
 	}
 	key(ev: KeyboardEvent): boolean {
 		if (ev.key === "Escape") {
@@ -1507,7 +1772,9 @@ export class ExtendTool implements Tool {
 		this.ctx.setOverlay([]);
 	}
 	hint(): string {
-		return this.edgeId ? "Click a LINE end to extend it to the boundary · Esc to pick a new boundary" : "Click the boundary (LINE, CIRCLE, ARC or polyline)";
+		return this.edgeId
+			? "Click near the end of a LINE to stretch it to the highlighted boundary — it only works when that end already points toward the boundary · Esc to pick a new boundary"
+			: "Click the boundary first (highlighted on hover) — a LINE, CIRCLE, ARC or polyline";
 	}
 }
 
@@ -1859,23 +2126,25 @@ export class DrawPolylineTool implements Tool {
 		this.reset();
 	}
 	pointer(phase: string, world: Point2): void {
-		const { p, prim } = snapMarker(this.ctx, world);
+		const { p: snapped, prim } = snapMarker(this.ctx, world);
+		const p = this.pts.length ? orthoConstrain(this.ctx, this.pts[this.pts.length - 1], snapped) : snapped;
 		if (phase === "down") {
 			const now = Date.now();
 			// Double-click (or click near the first vertex) finishes the polyline —
-			// no keyboard needed.
-			const doubleClick = now - this.lastDownTime < 350 && this.lastDownPos && dist(this.lastDownPos, p) < this.tol();
+			// no keyboard needed. Uses the raw snapped point, not the ortho-adjusted
+			// preview, so proximity detection isn't thrown off by the angle lock.
+			const doubleClick = now - this.lastDownTime < 350 && this.lastDownPos && dist(this.lastDownPos, snapped) < this.tol();
 			if (doubleClick && this.pts.length >= 2) {
 				this.finish(false);
 				return;
 			}
-			if (this.pts.length >= 3 && dist(this.pts[0], p) < this.tol()) {
+			if (this.pts.length >= 3 && dist(this.pts[0], snapped) < this.tol()) {
 				this.finish(true);
 				return;
 			}
 			this.pts.push(p);
 			this.lastDownTime = now;
-			this.lastDownPos = p;
+			this.lastDownPos = snapped;
 		}
 		const prims: OverlayPrim[] = [];
 		if (this.pts.length) {
@@ -2093,6 +2362,54 @@ export class AnnotateTool implements Tool {
 	}
 }
 
+/** The closed loop of points a fill can trace: a closed LWPOLYLINE's vertices, a
+ * sampled CIRCLE, or a sampled full ELLIPSE. Null for anything open/unsupported. */
+function closedBoundaryOf(e: RenderEntity): Point2[] | null {
+	if (e.type === "CIRCLE") {
+		const pts: Point2[] = [];
+		for (let i = 0; i < 64; i++) {
+			const a = (i / 64) * Math.PI * 2;
+			pts.push({ x: e.center.x + e.radius * Math.cos(a), y: e.center.y + e.radius * Math.sin(a) });
+		}
+		return pts;
+	}
+	if (e.type === "ELLIPSE" && isFullEllipseSweep(e.startAngle, e.endAngle)) {
+		return ellipsePoints(e.center, e.majorAxisEndpoint, e.ratio, 0, 360, 64).slice(0, -1);
+	}
+	if ((e.type === "LWPOLYLINE" || e.type === "POLYLINE") && e.closed && e.vertices.length >= 3) {
+		return e.vertices;
+	}
+	return null;
+}
+
+/**
+ * Fill (hatch) a closed region: click a closed polyline, circle or full
+ * ellipse to trace a solid fill over it. Saved as a "fill" annotation in the
+ * sidecar JSON — like notes and saved measurements, never as a DXF entity —
+ * so it can never write malformed HATCH geometry into the drawing. It's a
+ * traced snapshot: resizing the source shape afterwards doesn't move the fill.
+ */
+export class HatchTool implements Tool {
+	readonly id: ToolId = "hatch";
+	readonly panWithLeftDrag = false;
+	constructor(private ctx: ToolContext) {}
+	pointer(phase: string, world: Point2): void {
+		const doc = this.ctx.doc();
+		const id = doc ? this.ctx.pick(world) : null;
+		const e = id ? doc?.getEntity(id) : undefined;
+		const boundary = e ? closedBoundaryOf(e) : null;
+		if (phase !== "down") {
+			this.ctx.setOverlay(boundary ? [{ kind: "polygon", pts: boundary, color: this.ctx.accent, opacity: 0.3 }] : []);
+			return;
+		}
+		if (!boundary || !e) return;
+		this.ctx.addAnnotation({ id: AnnotationStore.newId(), kind: "fill", points: boundary, color: e.color });
+	}
+	hint(): string {
+		return "Click a closed polyline, circle or full ellipse to fill it — saved in the sidecar (like notes/measurements), so it won't appear in other DXF apps";
+	}
+}
+
 /**
  * Draw a linear dimension: click the two points to measure, then click to place
  * the dimension line. Builds plain LINE/LWPOLYLINE(arrowhead)/TEXT entities as
@@ -2223,5 +2540,6 @@ export function createTools(ctx: ToolContext): Record<ToolId, Tool> {
 		"explode": new ExplodeTool(ctx),
 		"dimension-linear": new DimensionLinearTool(ctx),
 		"annotate": new AnnotateTool(ctx),
+		"hatch": new HatchTool(ctx),
 	};
 }

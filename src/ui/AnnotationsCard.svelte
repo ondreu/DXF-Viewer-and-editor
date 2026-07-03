@@ -11,6 +11,7 @@
 		if (a.kind === "note") return a.text;
 		if (a.kind === "arrow") return a.text ?? "arrow";
 		if (a.kind === "rect") return a.text ?? "rectangle";
+		if (a.kind === "fill") return `${a.points.length}-point region`;
 		return `measure`;
 	};
 </script>

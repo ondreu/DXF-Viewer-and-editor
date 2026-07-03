@@ -29,15 +29,24 @@ This is **v1: DXF only**. DWG is intentionally out of scope (see
 - **Draw** — line, circle (centre+radius, 2-point or 3-point), arc
   (centre+start+end or 3-point), ellipse, polyline, rectangle and regular
   polygon (any side count), plus text. Drawn geometry becomes **real DXF
-  entities** written back to the file on save.
+  entities** written back to the file on save. Lines and polylines get a soft
+  angle assist near 0/90/180/270°; an **Ortho** toggle in the top bar hard-locks
+  to those angles, and pressing `Enter` after the start point lets you type an
+  exact angle and length instead of clicking.
 - **Editing** — move, copy, rotate, scale, mirror, delete, and change the
   layer/colour of `LINE`, `CIRCLE`, `ARC`, `ELLIPSE`, `LWPOLYLINE` and `TEXT`
   entities, with undo/redo.
-- **Multi-select** — `Ctrl`/`Cmd`+click to add entities to the selection; move,
-  copy, rotate, scale, mirror, delete or recolour them all at once. A
-  **select-similar** tool picks every entity sharing the clicked one's type and
-  layer; a **layer isolate** toggle hides everything else (purely a view
-  state — never touches the saved file or the undo stack).
+- **Multi-select** — `Ctrl`/`Cmd`+click to add entities to the selection; drag a
+  box over empty space for a CAD-style **window/crossing** rubber-band select
+  (left-to-right catches only fully-enclosed entities, right-to-left catches
+  anything the box touches); move, copy, rotate, scale, mirror, delete or
+  recolour them all at once. A **select-similar** tool picks every entity
+  sharing the clicked one's type and layer; a **layer isolate** toggle hides
+  everything else (purely a view state — never touches the saved file or the
+  undo stack). Select and select-similar sit in their own always-visible
+  cluster next to the ribbon tabs, and a **tool stickiness** setting controls
+  whether a tool stays active after finishing an action or snaps back to
+  Select automatically (AutoCAD-modify-command style).
 - **Precise properties** — edit exact position (X/Y), radius, arc start/end
   angles, and text height/rotation/content from the Properties card. Selecting
   multiple entities shows their combined length.
@@ -47,10 +56,17 @@ This is **v1: DXF only**. DWG is intentionally out of scope (see
   multi-selection.
 - **Corner tools** — fillet (round a corner between two lines with a tangent
   arc) and chamfer (bevel it with a straight cut), both prompting for the
-  radius/distance and trimming the two lines automatically.
-- **Trim / extend** — click a cutting edge (line, circle, arc or polyline),
-  then click a line or arc to trim it back to that edge, or a line to stretch
-  it out to a boundary.
+  radius/distance and trimming the two sides automatically. Works on plain
+  LINEs and on the edges of a LWPOLYLINE (e.g. a drawn rectangle's corner) —
+  touching a polyline edge explodes that polyline into individual LINEs so the
+  corner can hold a curved/trimmed segment. Hovering highlights whatever the
+  next click would pick.
+- **Trim / extend** — click a cutting edge (line, circle, arc or polyline,
+  highlighted on hover), then click a line or arc to trim it back to that
+  edge, or a line to stretch it out to a boundary; a dashed preview shows
+  exactly what will be trimmed/extended before you commit. Extend only
+  stretches a line in the direction it already points — if it's aimed away
+  from the boundary, nothing happens.
 - **Offset** — click a line, circle or arc, then click a side/distance for a
   parallel copy on the same layer.
 - **Join / break / explode** — merge a connected chain of LINEs into one
@@ -60,6 +76,11 @@ This is **v1: DXF only**. DWG is intentionally out of scope (see
   about a picked centre), both as one grouped undo step.
 - **Match properties** — an eyedropper that copies a source entity's
   layer/colour onto others you click.
+- **Fill / hatch** — trace a solid fill over a closed polyline, circle or full
+  ellipse. Saved as a "fill" annotation in the sidecar JSON, the same way
+  notes and saved measurements are, so it can never write malformed geometry
+  into the `.dxf` — it won't render in other DXF applications, and resizing
+  the source shape afterwards doesn't move the fill.
 - **Measure** — distance (with Δx/Δy and angle), radius/diameter/circumference,
   three-point angle, area/perimeter of a circle or closed polyline, and a
   coordinate readout (ID point), shown in a floating readout. Measurements can
@@ -80,27 +101,31 @@ This is **v1: DXF only**. DWG is intentionally out of scope (see
 - **Non-destructive saves** — anything the editor doesn't understand (whole
   entity types like `HATCH`, `SPLINE`, real `DIMENSION`, …) is preserved on
   save and shown as an *unsupported* placeholder, never silently discarded.
-- **Ribbon toolbar + floating cards** — a tabbed ribbon (Select / Measure /
-  Draw / Modify / Arrange / Annotate) groups the tool palette instead of one
-  long strip, alongside draggable, collapsible cards (properties, measurement,
-  layers, annotations). All styled from Obsidian's own theme variables.
+- **Ribbon toolbar + floating cards** — an AutoCAD-style ribbon: an
+  always-visible Select/Select-similar cluster next to a tabbed strip (Measure
+  / Draw / Modify / Arrange / Annotate) of larger icon+label buttons, plus
+  draggable, collapsible cards (properties, measurement, layers, annotations).
+  All styled from Obsidian's own theme variables.
 
 ### Interface
 
-- **Ribbon** (top-left, tabbed): **Select** (select, select-similar) ·
-  **Measure** (distance / radius / angle / area / point) · **Draw** (line /
-  circle [centre-radius, 2-point, 3-point] / arc [centre-based, 3-point] /
-  ellipse / polyline / rectangle / polygon / text) · **Modify** (copy / rotate
-  / scale / mirror / fillet / chamfer / trim / extend / offset / join / break
-  / explode) · **Arrange** (rectangular array / polar array / match
-  properties) · **Annotate** (linear dimension / note).
-- **Top bar**: fit · grid toggle · snap toggle · screenshot · undo · redo ·
-  delete selection · layer isolate · layers · annotations · save (a dot marks
-  unsaved changes).
+- **Ribbon** (top-left): an always-visible **Select** / **Similar** cluster
+  (never buried in a tab), plus tabs — **Measure** (distance / radius / angle
+  / area / point) · **Draw** (line / circle [centre-radius, 2-point, 3-point] /
+  arc [centre-based, 3-point] / ellipse / polyline / rectangle / polygon /
+  text) · **Modify** (copy / rotate / scale / mirror / fillet / chamfer / trim
+  / extend / offset / join / break / explode) · **Arrange** (rectangular array
+  / polar array / match properties) · **Annotate** (linear dimension / fill /
+  note).
+- **Top bar**: fit · grid toggle · snap toggle · ortho toggle · screenshot ·
+  undo · redo · delete selection · layer isolate · layers · annotations ·
+  save (a dot marks unsaved changes).
 - **Keyboard**: `Esc` cancels the current tool operation, `Enter` finishes a
-  polyline (`C` closes it), arrow keys nudge a selection, `Delete` removes it,
-  `Ctrl/Cmd+S` saves, `Ctrl/Cmd+Z` / `Shift+Ctrl/Cmd+Z` undo/redo. `Ctrl`/`Cmd`
-  +click extends the selection.
+  polyline (`C` closes it) or, mid-line, opens a prompt to type an exact
+  angle/length instead of clicking the end point; arrow keys nudge a
+  selection, `Delete` removes it, `Ctrl/Cmd+S` saves, `Ctrl/Cmd+Z` /
+  `Shift+Ctrl/Cmd+Z` undo/redo. `Ctrl`/`Cmd`+click extends the selection (also
+  works with a drag-select box).
 
 ### Supported entities
 

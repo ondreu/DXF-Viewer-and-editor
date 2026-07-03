@@ -36,7 +36,12 @@ export type Annotation =
 	| { id: string; kind: "note"; at: Point2; text: string; color?: number; attachedTo?: string; offset?: Point2 }
 	| { id: string; kind: "arrow"; from: Point2; to: Point2; text?: string; color?: number }
 	| { id: string; kind: "rect"; min: Point2; max: Point2; text?: string; color?: number }
-	| { id: string; kind: "measure"; points: Point2[]; data: MeasureData; color?: number };
+	| { id: string; kind: "measure"; points: Point2[]; data: MeasureData; color?: number }
+	// fill: a traced closed-region hatch, saved in the sidecar (not a real DXF
+	// HATCH entity) so it never risks writing malformed geometry into the .dxf.
+	// `points` is baked in at creation time and doesn't track later edits to the
+	// source shape.
+	| { id: string; kind: "fill"; points: Point2[]; color?: number; opacity?: number };
 
 export interface AnnotationFile {
 	version: 1;
