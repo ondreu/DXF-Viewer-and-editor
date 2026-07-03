@@ -39,10 +39,12 @@ export function draggable(node: HTMLElement) {
 		const prect = parent?.getBoundingClientRect() ?? { left: 0, top: 0 };
 		originLeft = rect.left - prect.left;
 		originTop = rect.top - prect.top;
-		node.style.left = originLeft + "px";
-		node.style.top = originTop + "px";
-		node.style.right = "auto";
-		node.style.bottom = "auto";
+		node.setCssStyles({
+			left: originLeft + "px",
+			top: originTop + "px",
+			right: "auto",
+			bottom: "auto",
+		});
 		(handle as HTMLElement).setPointerCapture(ev.pointerId);
 		ev.preventDefault();
 	};

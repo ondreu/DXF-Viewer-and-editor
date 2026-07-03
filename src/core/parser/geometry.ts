@@ -14,6 +14,45 @@ const ARC_SEGMENTS = 64;
 const MAX_INSERT_DEPTH = 8;
 const MAX_ARRAY = 400;
 
+/** A loosely-typed 3D point as produced by dxf-parser (any component may be absent). */
+type RawVertex = { x?: number; y?: number; z?: number };
+
+/**
+ * Structural view over a dxf-parser entity/block-entity, covering only the
+ * fields this module reads. dxf-parser's `IEntity` is assignable to this, and
+ * per-type fields (center, radius, vertices, …) are optional because they exist
+ * only on the relevant entity types.
+ */
+interface RawEntity {
+	type?: string;
+	handle?: string | number;
+	layer?: string;
+	color?: number;
+	colorIndex?: number;
+	center?: RawVertex;
+	radius?: number;
+	startAngle?: number;
+	endAngle?: number;
+	majorAxisEndPoint?: RawVertex;
+	axisRatio?: number;
+	elevation?: number;
+	vertices?: RawVertex[];
+	shape?: boolean;
+	startPoint?: RawVertex;
+	textHeight?: number;
+	rotation?: number;
+	text?: string;
+	position?: RawVertex;
+	height?: number;
+	name?: string;
+	columnCount?: number;
+	rowCount?: number;
+	columnSpacing?: number;
+	rowSpacing?: number;
+	xScale?: number;
+	yScale?: number;
+}
+
 /**
  * Build the renderer's semantic model from dxf-parser output, plus surface any
  * entities dxf-parser dropped as UNSUPPORTED placeholders. Two correctness
@@ -84,8 +123,7 @@ export function buildRenderModel(
 }
 
 function buildEntity(
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	e: any,
+	e: RawEntity,
 	handle: string,
 	normal: Vec3,
 	resolveColor: (e: {
@@ -111,7 +149,7 @@ function buildEntity(
 		}
 		case "CIRCLE":
 			if (!e.center) return null;
-			return { ...base, type: "CIRCLE", center: w(e.center), radius: e.radius };
+			return { ...base, type: "CIRCLE", center: w(e.center), radius: e.radius ?? 0 };
 		case "ARC": {
 			if (!e.center) return null;
 			const center = w(e.center);
@@ -121,7 +159,7 @@ function buildEntity(
 			if (!isDefaultNormal(normal) && normal.z < 0) {
 				[startAngle, endAngle] = [180 - endAngle, 180 - startAngle];
 			}
-			return { ...base, type: "ARC", center, radius: e.radius, startAngle, endAngle };
+			return { ...base, type: "ARC", center, radius: e.radius ?? 0, startAngle, endAngle };
 		}
 		case "ELLIPSE": {
 			if (!e.center) return null;
@@ -217,8 +255,7 @@ function composeInsertTx(
 }
 
 function flattenInsert(
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	insert: any,
+	insert: RawEntity,
 	blocks: Record<string, IBlock>,
 	parent: Tx,
 	depth: number,
@@ -252,8 +289,7 @@ function flattenInsert(
 					? (p) => ocsToWorld({ x: p.x, y: p.y, z: 0 }, topNormal)
 					: parent;
 			const tx = composeInsertTx(cell, block, ocsParent);
-			// eslint-disable-next-line @typescript-eslint/no-explicit-any
-			for (const be of (block.entities ?? []) as any[]) {
+			for (const be of block.entities ?? []) {
 				emitBlockEntity(be, tx, blocks, depth, out, topNormal);
 			}
 		}
@@ -261,8 +297,7 @@ function flattenInsert(
 }
 
 function emitBlockEntity(
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	be: any,
+	be: RawEntity,
 	tx: Tx,
 	blocks: Record<string, IBlock>,
 	depth: number,
@@ -270,25 +305,29 @@ function emitBlockEntity(
 	topNormal: Vec3
 ): void {
 	switch (be.type) {
-		case "LINE":
-			if (be.vertices?.length >= 2) out.push([tx(be.vertices[0]), tx(be.vertices[1])]);
+		case "LINE": {
+			const v = be.vertices;
+			if (v && v.length >= 2) out.push([tx(xy(v[0])), tx(xy(v[1]))]);
 			break;
+		}
 		case "LWPOLYLINE":
-		case "POLYLINE":
-			if (be.vertices?.length >= 2) {
-				for (let i = 0; i < be.vertices.length - 1; i++) {
-					out.push([tx(be.vertices[i]), tx(be.vertices[i + 1])]);
+		case "POLYLINE": {
+			const v = be.vertices;
+			if (v && v.length >= 2) {
+				for (let i = 0; i < v.length - 1; i++) {
+					out.push([tx(xy(v[i])), tx(xy(v[i + 1]))]);
 				}
-				if (be.shape && be.vertices.length > 2) {
-					out.push([tx(be.vertices[be.vertices.length - 1]), tx(be.vertices[0])]);
+				if (be.shape && v.length > 2) {
+					out.push([tx(xy(v[v.length - 1])), tx(xy(v[0]))]);
 				}
 			}
 			break;
+		}
 		case "CIRCLE":
-			if (be.center) pushArc(out, be.center, be.radius, 0, Math.PI * 2, tx);
+			if (be.center) pushArc(out, xy(be.center), be.radius ?? 0, 0, Math.PI * 2, tx);
 			break;
 		case "ARC":
-			if (be.center) pushArc(out, be.center, be.radius, be.startAngle ?? 0, be.endAngle ?? 0, tx);
+			if (be.center) pushArc(out, xy(be.center), be.radius ?? 0, be.startAngle ?? 0, be.endAngle ?? 0, tx);
 			break;
 		case "INSERT":
 			// Nested block reference: compose transforms and recurse.

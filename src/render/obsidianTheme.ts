@@ -3,10 +3,9 @@ import { DEFAULT_THEME, type RenderTheme } from "./theme";
 /** Resolve a CSS colour string (any form) to 0xRRGGBB using the DOM. */
 function cssColorToHex(value: string, fallback: number): number {
 	if (!value) return fallback;
-	const probe = document.createElement("span");
-	probe.style.color = value.trim();
-	probe.style.display = "none";
-	document.body.appendChild(probe);
+	const probe = activeDocument.createElement("span");
+	probe.setCssStyles({ color: value.trim(), display: "none" });
+	activeDocument.body.appendChild(probe);
 	const computed = getComputedStyle(probe).color;
 	probe.remove();
 	const m = computed.match(/rgba?\(([^)]+)\)/);

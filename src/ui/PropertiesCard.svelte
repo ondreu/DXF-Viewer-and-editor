@@ -10,7 +10,7 @@
 	$: entity = state.selected;
 	$: layers = state.layers;
 	$: multi = state.selectionCount > 1;
-	$: anchor = entity ? controller.document?.anchorOf(entity.id) ?? null : null;
+	$: anchor = entity ? controller.dxfDocument?.anchorOf(entity.id) ?? null : null;
 
 	const num = (e: Event) => parseFloat((e.target as HTMLInputElement).value);
 

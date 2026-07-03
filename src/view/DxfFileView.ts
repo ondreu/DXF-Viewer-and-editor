@@ -14,8 +14,7 @@ import App from "../ui/App.svelte";
  */
 export class DxfFileView extends FileView {
 	private controller: ViewController | null = null;
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	private ui: any = null;
+	private ui: App | null = null;
 
 	constructor(leaf: WorkspaceLeaf, private plugin: DxfPlugin) {
 		super(leaf);
@@ -95,7 +94,7 @@ export class DxfFileView extends FileView {
 		const folder = this.file.parent && this.file.parent.path ? this.file.parent.path + "/" : "";
 		const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
 		const path = `${folder}${this.file.basename}-${stamp}.png`;
-		await this.app.vault.createBinary(path, bytes.buffer as ArrayBuffer);
+		await this.app.vault.createBinary(path, bytes.buffer);
 		new Notice("Screenshot saved: " + path);
 	}
 
@@ -112,7 +111,8 @@ export class DxfFileView extends FileView {
 			void this.save();
 		} else if (mod && ev.key.toLowerCase() === "z") {
 			ev.preventDefault();
-			ev.shiftKey ? this.controller.redo() : this.controller.undo();
+			if (ev.shiftKey) this.controller.redo();
+			else this.controller.undo();
 		} else if (mod && ev.key.toLowerCase() === "y") {
 			ev.preventDefault();
 			this.controller.redo();
@@ -137,7 +137,7 @@ export class DxfFileView extends FileView {
 			const dxf = this.controller.serializeDxf();
 			if (dxf !== null) {
 				const bytes = new TextEncoder().encode(dxf);
-				const out = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+				const out = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
 				await this.app.vault.modifyBinary(this.file, out);
 				this.controller.markDxfSaved();
 				saved = true;

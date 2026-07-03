@@ -2,7 +2,7 @@ import esbuild from "esbuild";
 import esbuildSvelte from "esbuild-svelte";
 import sveltePreprocess from "svelte-preprocess";
 import process from "process";
-import builtins from "builtin-modules";
+import { builtinModules } from "module";
 import { writeFileSync } from "fs";
 
 const banner = `/*
@@ -27,7 +27,7 @@ const external = [
   "@lezer/common",
   "@lezer/highlight",
   "@lezer/lr",
-  ...builtins,
+  ...builtinModules,
 ];
 
 // -- Pass 1: bundle the parse worker into a standalone string. --------------

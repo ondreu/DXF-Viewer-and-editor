@@ -17,6 +17,9 @@ on:
 
 permissions:
   contents: write
+  # Required for GitHub artifact attestations (release-asset provenance).
+  id-token: write
+  attestations: write
 
 jobs:
   release:
@@ -33,6 +36,14 @@ jobs:
 
       - name: Build plugin
         run: npm run build
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-path: |
+            main.js
+            manifest.json
+            styles.css
 
       - name: Resolve release tag
         id: tag
@@ -55,11 +66,11 @@ jobs:
         run: |
           tag="${{ steps.tag.outputs.tag }}"
           if gh release view "$tag" >/dev/null 2>&1; then
-            gh release upload "$tag" main.js manifest.json styles.css versions.json --clobber
+            gh release upload "$tag" main.js manifest.json styles.css --clobber
           else
             gh release create "$tag" \
               --title="$tag" \
               --notes="Automated release for $tag. Install via BRAT using this repository." \
               --target "$GITHUB_SHA" \
-              main.js manifest.json styles.css versions.json
+              main.js manifest.json styles.css
           fi

@@ -184,7 +184,7 @@ export class ViewController {
 		this.renderer.setOverlay(this.toolOverlay);
 	}
 
-	get document(): DxfDocument | null {
+	get dxfDocument(): DxfDocument | null {
 		return this.doc;
 	}
 
@@ -431,7 +431,7 @@ export class ViewController {
 	}
 
 	setTheme(theme: Partial<RenderTheme>): void {
-		if (theme.accent !== undefined) this.accent = theme.accent as number;
+		if (theme.accent !== undefined) this.accent = theme.accent;
 		this.renderer.setTheme(theme);
 	}
 

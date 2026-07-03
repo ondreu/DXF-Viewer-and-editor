@@ -1,4 +1,4 @@
-# DXF Viewer & Editor for Obsidian
+# DXF Viewer and Editor
 
 View and lightly edit `.dxf` CAD drawings directly inside Obsidian — as full
 file views and as embeds in your notes — on **desktop and mobile**.

@@ -12,6 +12,13 @@ export interface Command {
 	undo(doc: DxfDocument): void;
 }
 
+/** Type-safe snapshot of a subset of a record's keys (used to capture undo state). */
+function pick<T extends object, K extends keyof T>(src: T, keys: K[]): Pick<T, K> {
+	const out = {} as Pick<T, K>;
+	for (const k of keys) out[k] = src[k];
+	return out;
+}
+
 /** Groups several commands into one undo/redo step (fillet, chamfer, array, ...). */
 export class BatchCommand implements Command {
 	constructor(private readonly commands: Command[], readonly label = "Edit") {}
@@ -114,11 +121,7 @@ export class SetPropsCommand implements Command {
 	constructor(private readonly id: string, private readonly patch: PropPatch) {}
 	do(doc: DxfDocument): void {
 		const all = doc.propsOf(this.id);
-		this.prev = {};
-		for (const k of Object.keys(this.patch) as (keyof PropPatch)[]) {
-			// eslint-disable-next-line @typescript-eslint/no-explicit-any
-			(this.prev as any)[k] = all[k];
-		}
+		this.prev = pick(all, Object.keys(this.patch) as (keyof PropPatch)[]);
 		doc.setProps(this.id, this.patch);
 	}
 	undo(doc: DxfDocument): void {
@@ -277,11 +280,7 @@ export class UpdateLayerCommand implements Command {
 	constructor(private readonly name: string, private readonly patch: LayerPatch) {}
 	do(doc: DxfDocument): void {
 		const all = doc.layerState(this.name);
-		this.prev = {};
-		for (const k of Object.keys(this.patch) as (keyof LayerPatch)[]) {
-			// eslint-disable-next-line @typescript-eslint/no-explicit-any
-			(this.prev as any)[k] = all[k];
-		}
+		this.prev = pick(all, Object.keys(this.patch) as (keyof LayerPatch)[]);
 		doc.updateLayer(this.name, this.patch);
 	}
 	undo(doc: DxfDocument): void {

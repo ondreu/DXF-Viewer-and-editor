@@ -1695,12 +1695,12 @@ export class TrimTool implements Tool {
 			const e = id ? doc.getEntity(id) : undefined;
 			const eligible = e && isCuttingEdgeType(e);
 			if (phase !== "down") {
-				this.ctx.setOverlay(eligible ? highlightEntity(e!, this.ctx.accent) : []);
+				this.ctx.setOverlay(eligible ? highlightEntity(e, this.ctx.accent) : []);
 				return;
 			}
 			if (eligible) {
 				this.edgeId = id;
-				this.ctx.setOverlay(highlightEntity(e!, this.ctx.accent));
+				this.ctx.setOverlay(highlightEntity(e, this.ctx.accent));
 			}
 			return;
 		}
@@ -1804,12 +1804,12 @@ export class ExtendTool implements Tool {
 			const e = id ? doc.getEntity(id) : undefined;
 			const eligible = e && isCuttingEdgeType(e);
 			if (phase !== "down") {
-				this.ctx.setOverlay(eligible ? highlightEntity(e!, this.ctx.accent) : []);
+				this.ctx.setOverlay(eligible ? highlightEntity(e, this.ctx.accent) : []);
 				return;
 			}
 			if (eligible) {
 				this.edgeId = id;
-				this.ctx.setOverlay(highlightEntity(e!, this.ctx.accent));
+				this.ctx.setOverlay(highlightEntity(e, this.ctx.accent));
 			}
 			return;
 		}
@@ -2619,7 +2619,6 @@ export class DimensionLinearTool implements Tool {
 	}
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function createTools(ctx: ToolContext): Record<ToolId, Tool> {
 	return {
 		"select": new SelectTool(ctx),

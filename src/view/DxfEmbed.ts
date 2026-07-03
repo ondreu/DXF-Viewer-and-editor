@@ -45,7 +45,11 @@ class DxfEmbedChild extends MarkdownRenderChild {
 		super(container);
 	}
 
-	async onload(): Promise<void> {
+	onload(): void {
+		void this.render();
+	}
+
+	private async render(): Promise<void> {
 		const host = this.containerEl;
 		host.addClass("dxf-embed");
 		host.style.height = this.plugin.settings.embedHeight + "px";

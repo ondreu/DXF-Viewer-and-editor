@@ -362,8 +362,7 @@ export class DxfRenderer {
 		for (const [id, obj] of this.objects) {
 			const selected = this.selection.has(id);
 			obj.traverse((child) => {
-				// eslint-disable-next-line @typescript-eslint/no-explicit-any
-				const mat = (child as any).material as LineBasicMaterial | undefined;
+				const mat = (child as { material?: LineBasicMaterial }).material;
 				if (mat && "color" in mat) {
 					if (selected) mat.color = new Color(this.theme.accent);
 					else {
@@ -545,7 +544,7 @@ export class DxfRenderer {
 		let texture = this.labelCache.get(key);
 		let aspect = 1;
 		if (!texture) {
-			const canvas = document.createElement("canvas");
+			const canvas = activeDocument.createElement("canvas");
 			const px = 48;
 			const ctx = canvas.getContext("2d")!;
 			ctx.font = `${px}px sans-serif`;
@@ -600,7 +599,7 @@ export class DxfRenderer {
 	private requestFrame(): void {
 		if (this.frameRequested || this.disposed) return;
 		this.frameRequested = true;
-		requestAnimationFrame(() => {
+		activeWindow.requestAnimationFrame(() => {
 			this.frameRequested = false;
 			if (this.disposed) return;
 			this.rebuildGrid();
@@ -872,10 +871,14 @@ export class DxfRenderer {
 	}
 }
 
+interface DisposableChild {
+	geometry?: { dispose(): void };
+	material?: { dispose(): void; map?: { dispose(): void } };
+}
+
 function disposeObject(obj: Object3D, disposeTextures = true): void {
 	obj.traverse((child) => {
-		// eslint-disable-next-line @typescript-eslint/no-explicit-any
-		const c = child as any;
+		const c = child as DisposableChild;
 		if (c.geometry) c.geometry.dispose();
 		if (c.material) {
 			if (disposeTextures && c.material.map) c.material.map.dispose();
