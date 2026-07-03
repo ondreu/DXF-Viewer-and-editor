@@ -547,7 +547,52 @@ export class DxfRenderer {
 		let lastX = 0;
 		let lastY = 0;
 
+		// -- two-finger pinch-to-zoom / touch-pan (touch pointers only) --------
+		const touchPoints = new Map<number, { x: number; y: number }>();
+		let pinching = false;
+		let pinchStartDist = 0;
+		let pinchStartUnitsPerPixel = 1;
+		let pinchStartMidWorld: Point2 = { x: 0, y: 0 };
+		const dist = (a: { x: number; y: number }, b: { x: number; y: number }) =>
+			Math.hypot(a.x - b.x, a.y - b.y);
+		const beginPinch = () => {
+			panning = false;
+			leftMaybeClick = false;
+			pinching = true;
+			const pts = [...touchPoints.values()];
+			pinchStartDist = dist(pts[0], pts[1]);
+			pinchStartUnitsPerPixel = this.unitsPerPixel;
+			const midX = (pts[0].x + pts[1].x) / 2;
+			const midY = (pts[0].y + pts[1].y) / 2;
+			pinchStartMidWorld = this.screenToWorld(midX, midY);
+		};
+		const updatePinch = () => {
+			const pts = [...touchPoints.values()].slice(0, 2);
+			const d = dist(pts[0], pts[1]);
+			if (pinchStartDist > 0 && d > 0) {
+				this.unitsPerPixel = pinchStartUnitsPerPixel * (pinchStartDist / d);
+			}
+			const midX = (pts[0].x + pts[1].x) / 2;
+			const midY = (pts[0].y + pts[1].y) / 2;
+			const after = this.screenToWorld(midX, midY);
+			this.centerX += pinchStartMidWorld.x - after.x;
+			this.centerY += pinchStartMidWorld.y - after.y;
+			this.updateCamera();
+			this.buildOverlay(); // pixel-constant sizes changed with zoom
+			this.requestFrame();
+			this.events.emit("viewchange", undefined);
+		};
+
 		el.addEventListener("pointerdown", (ev) => {
+			if (ev.pointerType === "touch") {
+				touchPoints.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+				if (touchPoints.size === 2) {
+					el.setPointerCapture(ev.pointerId);
+					beginPinch();
+					return;
+				}
+				if (touchPoints.size > 2) return; // ignore a third+ finger
+			}
 			lastX = ev.clientX;
 			lastY = ev.clientY;
 			moved = false;
@@ -570,6 +615,14 @@ export class DxfRenderer {
 		});
 
 		el.addEventListener("pointermove", (ev) => {
+			if (ev.pointerType === "touch" && touchPoints.has(ev.pointerId)) {
+				touchPoints.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+				if (pinching) {
+					updatePinch();
+					return;
+				}
+				// single finger down (no pinch yet): fall through to normal pan/tool handling
+			}
 			const dx = ev.clientX - lastX;
 			const dy = ev.clientY - lastY;
 			if (Math.abs(dx) + Math.abs(dy) > 2) moved = true;
@@ -593,6 +646,24 @@ export class DxfRenderer {
 			} catch {
 				/* ignore */
 			}
+			if (ev.pointerType === "touch" && touchPoints.has(ev.pointerId)) {
+				touchPoints.delete(ev.pointerId);
+				if (pinching) {
+					if (touchPoints.size < 2) {
+						pinching = false;
+						const remaining = [...touchPoints.values()][0];
+						if (remaining) {
+							// one finger still down: resume as a plain single-finger pan
+							lastX = remaining.x;
+							lastY = remaining.y;
+							moved = true;
+							panning = true;
+							leftMaybeClick = false;
+						}
+					}
+					return;
+				}
+			}
 			if (panning) {
 				panning = false;
 				if (leftMaybeClick && !moved) this.handleSelectClick(ev);
@@ -602,7 +673,9 @@ export class DxfRenderer {
 			}
 		};
 		el.addEventListener("pointerup", end);
-		el.addEventListener("pointercancel", () => {
+		el.addEventListener("pointercancel", (ev) => {
+			touchPoints.delete(ev.pointerId);
+			if (touchPoints.size < 2) pinching = false;
 			panning = false;
 			leftMaybeClick = false;
 		});
