@@ -27,6 +27,16 @@
 .dxf-ui > * {
 	pointer-events: auto;
 }
+/* layout wrappers stay pass-through; the actual controls inside opt back in */
+.dxf-ui-topbar,
+.dxf-cards {
+	pointer-events: none;
+}
+.dxf-ribbon,
+.dxf-ui-top,
+.dxf-card {
+	pointer-events: auto;
+}
 
 /* -- icon buttons ---------------------------------------------------------- */
 .dxf-icon-btn,
@@ -82,12 +92,23 @@
 	background: var(--color-orange, #e0a030);
 }
 
-/* -- tool ribbon (top-left) ------------------------------------------------- */
-.dxf-ribbon {
+/* -- top bar: ribbon (grows) + action cluster (fixed), wraps on narrow screens */
+.dxf-ui-topbar {
 	position: absolute;
 	left: 10px;
+	right: 10px;
 	top: 10px;
-	max-width: calc(100% - 300px);
+	display: flex;
+	flex-wrap: wrap;
+	align-items: flex-start;
+	gap: 8px;
+}
+
+/* -- tool ribbon ------------------------------------------------------------ */
+.dxf-ribbon {
+	position: relative;
+	flex: 1 1 220px;
+	max-width: 100%;
 	display: flex;
 	flex-direction: column;
 	min-width: 0;
@@ -95,7 +116,6 @@
 	border: 1px solid var(--background-modifier-border);
 	border-radius: var(--radius-m);
 	box-shadow: var(--shadow-s);
-	pointer-events: auto;
 }
 .dxf-ribbon-tabs {
 	display: flex;
@@ -133,9 +153,10 @@
 
 /* -- top action cluster ---------------------------------------------------- */
 .dxf-ui-top {
-	position: absolute;
-	top: 10px;
-	right: 10px;
+	position: relative;
+	flex: 0 0 auto;
+	max-width: 100%;
+	overflow-x: auto;
 	display: flex;
 	align-items: center;
 	gap: 2px;
@@ -343,3 +364,62 @@
 	background: var(--background-primary);
 }
 .dxf-embed .dxf-canvas { position: absolute; inset: 0; }
+
+/* -- touch targets: bigger hit areas on touch devices (phones + tablets) --- */
+@media (pointer: coarse) {
+	.dxf-icon-btn,
+	.dxf-tool-btn {
+		width: 38px;
+		height: 38px;
+	}
+	.dxf-icon-btn svg,
+	.dxf-tool-btn svg {
+		width: 19px;
+		height: 19px;
+	}
+	.dxf-card-actions .dxf-icon-btn { width: 30px; height: 30px; }
+	.dxf-layer-row .dxf-icon-btn,
+	.dxf-anno-row .dxf-icon-btn { width: 30px; height: 30px; }
+}
+
+/* -- narrow screens (phones): reflow the topbar and turn floating cards into
+   a stacked bottom sheet instead of pixel-anchored side panels, which would
+   otherwise overlap the ribbon/action cluster and each other -------------- */
+@media (max-width: 700px) {
+	.dxf-ui-top {
+		/* on its own wrapped row now, so it can use the full width for scrolling */
+		flex-basis: 100%;
+	}
+
+	.dxf-cards {
+		position: absolute;
+		left: 8px;
+		right: 8px;
+		bottom: 40px;
+		max-height: 60vh;
+		display: flex;
+		flex-direction: column;
+		gap: 8px;
+		overflow-y: auto;
+		pointer-events: auto;
+	}
+	.dxf-card {
+		position: static;
+		width: auto;
+		max-width: none;
+		max-height: 45vh;
+		display: flex;
+		flex-direction: column;
+	}
+	.dxf-card-body {
+		overflow-y: auto;
+	}
+	.dxf-card-head {
+		/* dragging is disabled while cards are pinned into the stacked sheet */
+		cursor: default;
+	}
+
+	.dxf-hint {
+		max-width: calc(100% - 16px);
+	}
+}
