@@ -1,6 +1,6 @@
 {
   "id": "dxf-viewer-editor",
-  "name": "DXF Viewer & Editor",
+  "name": "DXF Viewer and Editor",
   "version": "0.9.0",
   "minAppVersion": "1.5.0",
   "description": "View, measure, draw and edit DXF drawings — ellipses, dimensions, fillet/chamfer/trim/extend/join/break/explode, arrays, layers and precise properties — as file views and note embeds, on desktop and mobile.",
