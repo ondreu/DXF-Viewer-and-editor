@@ -1,4 +1,5 @@
 import type { RenderEntity, Point2 } from "../core/model/types";
+import { constructionLineSegment } from "../core/geom/geometry2d";
 
 export type SnapType =
 	| "endpoint"
@@ -83,6 +84,10 @@ function endpointsOf(e: RenderEntity): Point2[] {
 		}
 		case "ELLIPSE":
 			return [e.majorAxisEndpoint];
+		case "RAY":
+			// A ray starts at its base point — a real endpoint. An XLINE is infinite
+			// both ways, so its base point isn't an endpoint (offered via segments).
+			return [e.basePoint];
 		default:
 			return [];
 	}
@@ -154,6 +159,11 @@ function segmentsOf(e: RenderEntity): Array<[Point2, Point2]> {
 			if (e.closed && e.vertices.length > 2) out.push([e.vertices[e.vertices.length - 1], e.vertices[0]]);
 			return out;
 		}
+		case "XLINE":
+		case "RAY":
+			// Expose the (semi-)infinite line as one long segment so it participates
+			// in intersection snapping — a construction line's whole purpose.
+			return [constructionLineSegment(e.basePoint, e.through, e.type === "RAY")];
 		default:
 			return [];
 	}

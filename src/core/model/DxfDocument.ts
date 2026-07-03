@@ -218,6 +218,10 @@ export class DxfDocument {
 			case "ELLIPSE":
 				e = { id: h, type: "ELLIPSE", layer: spec.layer, color, colorNumber: spec.colorNumber, center: { ...spec.center }, majorAxisEndpoint: { ...spec.majorAxisEndpoint }, ratio: spec.ratio, startAngle: spec.startAngle ?? 0, endAngle: spec.endAngle ?? 360 };
 				break;
+			case "XLINE":
+			case "RAY":
+				e = { id: h, type: spec.type, layer: spec.layer, color, colorNumber: spec.colorNumber, basePoint: { ...spec.basePoint }, through: { ...spec.through } };
+				break;
 		}
 		this.entities.push(e);
 		this.byId.set(h, e);
@@ -424,6 +428,9 @@ export class DxfDocument {
 				return { ...e.position };
 			case "INSERT":
 				return { ...e.position };
+			case "XLINE":
+			case "RAY":
+				return { ...e.basePoint };
 			case "UNSUPPORTED":
 				return e.position ? { ...e.position } : null;
 		}
@@ -575,11 +582,13 @@ export class DxfDocument {
 		let colorApplied = false;
 		let layerTagIndex = -1;
 		const appliedCodes = new Set<number>();
-		// ELLIPSE stores its major-axis endpoint (group 11/21, pair 1) as a vector
-		// *relative* to the centre, not an absolute point — so a whole-entity
-		// translate (offsetX/offsetY) must not shift it; only an explicit
-		// per-vertex edit (rotate/scale/mirror/grip, via pointOffsets) should.
-		const isEllipse = this.byId.get(id)?.type === "ELLIPSE";
+		// ELLIPSE (major-axis endpoint) and XLINE/RAY (direction vector) store their
+		// group 11/21 pair (pair 1) as a vector *relative* to the base point, not an
+		// absolute point — so a whole-entity translate (offsetX/offsetY) must not
+		// shift it; only an explicit per-vertex edit (rotate/scale/mirror/grip, via
+		// pointOffsets) should.
+		const t1 = this.byId.get(id)?.type;
+		const relativePair1 = t1 === "ELLIPSE" || t1 === "XLINE" || t1 === "RAY";
 		// Track the coordinate-pair ordinal so per-vertex offsets hit the right
 		// point (X code opens a new pair; the matching Y code reuses it).
 		let pair = -1;
@@ -589,11 +598,11 @@ export class DxfDocument {
 			if (t.code >= 10 && t.code <= 19) {
 				pair++;
 				const vo = s.pointOffsets?.get(pair)?.dx ?? 0;
-				const whole = isEllipse && pair === 1 ? 0 : s.offsetX;
+				const whole = relativePair1 && pair === 1 ? 0 : s.offsetX;
 				if (whole !== 0 || vo !== 0) value = fmtReal(parseFloat(t.value) + whole + vo);
 			} else if (t.code >= 20 && t.code <= 29) {
 				const vo = s.pointOffsets?.get(pair)?.dy ?? 0;
-				const whole = isEllipse && pair === 1 ? 0 : s.offsetY;
+				const whole = relativePair1 && pair === 1 ? 0 : s.offsetY;
 				if (whole !== 0 || vo !== 0) value = fmtReal(parseFloat(t.value) + whole + vo);
 			} else if (s.codeOverrides?.has(t.code) && !appliedCodes.has(t.code)) {
 				value = s.codeOverrides.get(t.code)!;
@@ -725,6 +734,9 @@ function vertexOf(e: RenderEntity, pairIndex: number): Point2 | null {
 			return pairIndex === 0 ? e.center : null;
 		case "ELLIPSE":
 			return pairIndex === 0 ? e.center : pairIndex === 1 ? e.majorAxisEndpoint : null;
+		case "XLINE":
+		case "RAY":
+			return pairIndex === 0 ? e.basePoint : pairIndex === 1 ? e.through : null;
 		case "TEXT":
 		case "MTEXT":
 			return pairIndex === 0 ? e.position : null;
@@ -738,6 +750,8 @@ function vertexIndices(e: RenderEntity): number[] {
 	switch (e.type) {
 		case "LINE":
 		case "ELLIPSE":
+		case "XLINE":
+		case "RAY":
 			return [0, 1];
 		case "LWPOLYLINE":
 		case "POLYLINE":
@@ -774,6 +788,11 @@ function translate(e: RenderEntity, dx: number, dy: number): void {
 		case "ELLIPSE":
 			p(e.center);
 			p(e.majorAxisEndpoint);
+			break;
+		case "XLINE":
+		case "RAY":
+			p(e.basePoint);
+			p(e.through);
 			break;
 		case "LWPOLYLINE":
 		case "POLYLINE":

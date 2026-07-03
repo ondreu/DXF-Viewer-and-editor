@@ -1,5 +1,5 @@
 import type { RenderEntity, Point2 } from "../core/model/types";
-import { ellipsePoints } from "../core/geom/geometry2d";
+import { ellipsePoints, constructionLineSegment } from "../core/geom/geometry2d";
 
 function distToSegment(p: Point2, a: Point2, b: Point2): number {
 	const dx = b.x - a.x;
@@ -68,6 +68,11 @@ export function distanceToEntity(p: Point2, e: RenderEntity): number {
 			for (const [a, b] of e.segments) min = Math.min(min, distToSegment(p, a, b));
 			// also allow picking the insertion point itself
 			return Math.min(min, Math.hypot(p.x - e.position.x, p.y - e.position.y));
+		}
+		case "XLINE":
+		case "RAY": {
+			const [a, b] = constructionLineSegment(e.basePoint, e.through, e.type === "RAY");
+			return distToSegment(p, a, b);
 		}
 		case "UNSUPPORTED":
 			return e.position ? Math.hypot(p.x - e.position.x, p.y - e.position.y) : Infinity;
@@ -169,6 +174,9 @@ function outlineChains(e: RenderEntity): Point2[][] | null {
 		}
 		case "INSERT":
 			return e.segments.length ? e.segments.map(([a, b]) => [a, b]) : [[e.position, e.position]];
+		case "XLINE":
+		case "RAY":
+			return [constructionLineSegment(e.basePoint, e.through, e.type === "RAY")];
 		case "UNSUPPORTED":
 			return e.position ? [[e.position, e.position]] : null;
 	}

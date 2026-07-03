@@ -80,6 +80,18 @@ export function entityToTags(e: RenderEntity, handle: string): DxfTag[] | null {
 			tags.push({ code: 1, value: e.text });
 			if (e.rotation) tags.push({ code: 50, value: fmtReal(e.rotation) });
 			return tags;
+		case "XLINE":
+		case "RAY": {
+			// group 10/20/30 = base point; group 11/21/31 = unit direction vector.
+			pt(e.basePoint.x, e.basePoint.y, 10, 20, 30);
+			let dx = e.through.x - e.basePoint.x;
+			let dy = e.through.y - e.basePoint.y;
+			const len = Math.hypot(dx, dy) || 1;
+			dx /= len;
+			dy /= len;
+			pt(dx, dy, 11, 21, 31);
+			return tags;
+		}
 		default:
 			return null;
 	}

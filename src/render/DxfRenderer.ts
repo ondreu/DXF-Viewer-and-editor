@@ -27,7 +27,7 @@ import { EventEmitter } from "../core/events/EventEmitter";
 import { DEFAULT_THEME, type RenderTheme } from "./theme";
 import { pickEntity } from "./picking";
 import type { Overlay, OverlayPrim } from "./overlay";
-import { ellipsePoints } from "../core/geom/geometry2d";
+import { ellipsePoints, constructionLineSegment } from "../core/geom/geometry2d";
 import { glyphFor, GLYPH_HEIGHT, GLYPH_ADVANCE } from "./vectorFont";
 
 export type RendererEvents = {
@@ -253,6 +253,9 @@ export class DxfRenderer {
 			case "TEXT":
 			case "MTEXT":
 				return this.textObject(e.text, e.position, e.height || 1, e.rotation || 0, color);
+			case "XLINE":
+			case "RAY":
+				return this.lineObject(constructionLineSegment(e.basePoint, e.through, e.type === "RAY"), color, false);
 			case "INSERT": {
 				const g = new Group();
 				const mat = new LineBasicMaterial({ color });
@@ -836,6 +839,10 @@ export class DxfRenderer {
 					acc(e.position);
 					e.segments.forEach(([a, b]) => { acc(a); acc(b); });
 					break;
+				// Construction lines are (semi-)infinite; only their base point
+				// contributes to the fit bounds so "zoom to fit" isn't blown out.
+				case "XLINE":
+				case "RAY": acc(e.basePoint); break;
 				case "UNSUPPORTED": if (e.position) acc(e.position); break;
 			}
 		}
