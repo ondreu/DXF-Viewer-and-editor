@@ -31,6 +31,7 @@
 			<button class="dxf-icon-btn" title="Fit to view" on:click={() => controller.fit()} use:icon={"maximize"} />
 			<button class="dxf-icon-btn" class:is-active={state.gridVisible} title="Toggle grid" on:click={() => controller.toggleGrid()} use:icon={"grid"} />
 			<button class="dxf-icon-btn" class:is-active={state.snap.enabled} title="Toggle snapping" on:click={() => controller.setSnap({ enabled: !state.snap.enabled })} use:icon={"magnet"} />
+			<button class="dxf-icon-btn" class:is-active={state.snap.ortho} title="Ortho: lock new lines to 0/90/180/270°" on:click={() => controller.setSnap({ ortho: !state.snap.ortho })} use:icon={"axis-3d"} />
 			<button class="dxf-icon-btn" title="Screenshot (PNG to vault)" on:click={onScreenshot} use:icon={"camera"} />
 			<span class="dxf-top-sep" />
 			<button class="dxf-icon-btn" title="Undo" disabled={!state.canUndo} on:click={() => controller.undo()} use:icon={"undo-2"} />

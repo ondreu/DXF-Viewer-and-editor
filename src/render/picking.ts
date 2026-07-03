@@ -75,3 +75,114 @@ export function pickEntity(
 	}
 	return best;
 }
+
+export interface Rect {
+	minX: number;
+	minY: number;
+	maxX: number;
+	maxY: number;
+}
+
+function pointInRect(p: Point2, r: Rect): boolean {
+	return p.x >= r.minX && p.x <= r.maxX && p.y >= r.minY && p.y <= r.maxY;
+}
+
+function segmentsIntersect(a: Point2, b: Point2, c: Point2, d: Point2): boolean {
+	const cross = (o: Point2, p: Point2, q: Point2) => (p.x - o.x) * (q.y - o.y) - (p.y - o.y) * (q.x - o.x);
+	const d1 = cross(c, d, a);
+	const d2 = cross(c, d, b);
+	const d3 = cross(a, b, c);
+	const d4 = cross(a, b, d);
+	if (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))) return true;
+	return false;
+}
+
+function segmentIntersectsRect(a: Point2, b: Point2, r: Rect): boolean {
+	if (pointInRect(a, r) || pointInRect(b, r)) return true;
+	const corners: Point2[] = [
+		{ x: r.minX, y: r.minY },
+		{ x: r.maxX, y: r.minY },
+		{ x: r.maxX, y: r.maxY },
+		{ x: r.minX, y: r.maxY },
+	];
+	for (let i = 0; i < 4; i++) {
+		if (segmentsIntersect(a, b, corners[i], corners[(i + 1) % 4])) return true;
+	}
+	return false;
+}
+
+/** One or more open point chains approximating an entity's outline, for rubber-band hit testing. */
+function outlineChains(e: RenderEntity): Point2[][] | null {
+	switch (e.type) {
+		case "LINE":
+			return [[e.start, e.end]];
+		case "LWPOLYLINE":
+		case "POLYLINE":
+			return [e.closed && e.vertices.length > 2 ? [...e.vertices, e.vertices[0]] : e.vertices];
+		case "CIRCLE": {
+			const pts: Point2[] = [];
+			for (let i = 0; i <= 32; i++) {
+				const a = (i / 32) * Math.PI * 2;
+				pts.push({ x: e.center.x + e.radius * Math.cos(a), y: e.center.y + e.radius * Math.sin(a) });
+			}
+			return [pts];
+		}
+		case "ARC": {
+			const start = (e.startAngle * Math.PI) / 180;
+			let sweep = ((e.endAngle - e.startAngle) * Math.PI) / 180;
+			if (sweep <= 0) sweep += Math.PI * 2;
+			const pts: Point2[] = [];
+			for (let i = 0; i <= 32; i++) {
+				const a = start + (sweep * i) / 32;
+				pts.push({ x: e.center.x + e.radius * Math.cos(a), y: e.center.y + e.radius * Math.sin(a) });
+			}
+			return [pts];
+		}
+		case "ELLIPSE":
+			return [ellipsePoints(e.center, e.majorAxisEndpoint, e.ratio, e.startAngle, e.endAngle, 32)];
+		case "TEXT":
+		case "MTEXT": {
+			const h = e.height || 1;
+			const w = Math.max(h, e.text.length * h * 0.6);
+			const p = e.position;
+			return [[p, { x: p.x + w, y: p.y }, { x: p.x + w, y: p.y + h }, { x: p.x, y: p.y + h }, p]];
+		}
+		case "INSERT":
+			return e.segments.length ? e.segments.map(([a, b]) => [a, b]) : [[e.position, e.position]];
+		case "UNSUPPORTED":
+			return e.position ? [[e.position, e.position]] : null;
+	}
+}
+
+/**
+ * Entities caught by a rubber-band drag. "window" (left-to-right drag) only
+ * matches entities fully enclosed by the box; "crossing" (right-to-left drag)
+ * matches anything the box touches — the standard CAD convention.
+ */
+export function entitiesInRect(
+	entities: RenderEntity[],
+	rect: Rect,
+	mode: "window" | "crossing",
+	isHidden: (id: string) => boolean
+): string[] {
+	const out: string[] = [];
+	for (const e of entities) {
+		if (isHidden(e.id)) continue;
+		const chains = outlineChains(e);
+		if (!chains || !chains.length) continue;
+		if (mode === "window") {
+			if (chains.every((chain) => chain.every((p) => pointInRect(p, rect)))) out.push(e.id);
+			continue;
+		}
+		let hit = false;
+		for (const chain of chains) {
+			if (chain.some((p) => pointInRect(p, rect))) { hit = true; break; }
+			for (let i = 0; i < chain.length - 1; i++) {
+				if (segmentIntersectsRect(chain[i], chain[i + 1], rect)) { hit = true; break; }
+			}
+			if (hit) break;
+		}
+		if (hit) out.push(e.id);
+	}
+	return out;
+}

@@ -12,6 +12,25 @@ export class DxfSettingsTab extends PluginSettingTab {
 		containerEl.empty();
 
 		new Setting(containerEl)
+			.setName("Tool stickiness")
+			.setDesc(
+				"How readily a tool hands control back to Select once it finishes an action. " +
+					"“Stay active” keeps drawing/editing with the same tool until you switch " +
+					"yourself (classic); “Return to Select” snaps back to Select after every " +
+					"completed action, AutoCAD-modify-command style."
+			)
+			.addDropdown((d) =>
+				d
+					.addOption("sticky", "Stay active until you switch")
+					.addOption("auto-select", "Return to Select after each action")
+					.setValue(this.plugin.settings.toolStickiness)
+					.onChange(async (v) => {
+						this.plugin.settings.toolStickiness = v === "auto-select" ? "auto-select" : "sticky";
+						await this.plugin.saveSettings();
+					})
+			);
+
+		new Setting(containerEl)
 			.setName("Nudge step")
 			.setDesc("Distance (drawing units) applied by arrow-key or button nudges.")
 			.addText((t) =>

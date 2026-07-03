@@ -65,6 +65,7 @@ export class DxfFileView extends FileView {
 		this.controller = new ViewController(canvasEl, {
 			theme: themeFromObsidian(host),
 			promptText: (initial, title) => promptForText(this.app, initial, title ?? "Text"),
+			toolStickiness: () => this.plugin.settings.toolStickiness,
 		});
 
 		this.ui = new App({

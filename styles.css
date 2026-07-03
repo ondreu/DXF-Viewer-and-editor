@@ -39,8 +39,7 @@
 }
 
 /* -- icon buttons ---------------------------------------------------------- */
-.dxf-icon-btn,
-.dxf-tool-btn {
+.dxf-icon-btn {
 	position: relative;
 	display: inline-flex;
 	align-items: center;
@@ -55,8 +54,7 @@
 	box-shadow: none;
 	padding: 0;
 }
-.dxf-icon-btn:hover,
-.dxf-tool-btn:hover {
+.dxf-icon-btn:hover {
 	background: var(--background-modifier-hover);
 	color: var(--text-normal);
 }
@@ -65,7 +63,6 @@
 	cursor: default;
 	background: transparent;
 }
-.dxf-tool-btn.is-active,
 .dxf-icon-btn.is-active {
 	background: var(--background-modifier-active-hover, var(--background-modifier-hover));
 	color: var(--text-accent);
@@ -77,8 +74,7 @@
 .dxf-icon-btn.danger:hover {
 	color: var(--text-error);
 }
-.dxf-icon-btn svg,
-.dxf-tool-btn svg {
+.dxf-icon-btn svg {
 	width: 17px;
 	height: 17px;
 }
@@ -104,23 +100,43 @@
 	gap: 8px;
 }
 
-/* -- tool ribbon ------------------------------------------------------------ */
+/* -- tool ribbon (AutoCAD-style: a persistent Select cluster that's always
+   visible, plus tabbed panels of bigger icon+label buttons) ---------------- */
 .dxf-ribbon {
 	position: relative;
-	flex: 1 1 220px;
+	flex: 1 1 460px;
 	max-width: 100%;
 	display: flex;
-	flex-direction: column;
+	align-items: stretch;
 	min-width: 0;
 	background: var(--background-secondary);
 	border: 1px solid var(--background-modifier-border);
 	border-radius: var(--radius-m);
 	box-shadow: var(--shadow-s);
 }
+.dxf-ribbon-select {
+	flex: 0 0 auto;
+	display: flex;
+	align-items: stretch;
+	gap: 3px;
+	padding: 6px;
+}
+.dxf-ribbon-sep {
+	width: 1px;
+	flex: 0 0 auto;
+	margin: 8px 0;
+	background: var(--background-modifier-border);
+}
+.dxf-ribbon-main {
+	flex: 1 1 auto;
+	min-width: 0;
+	display: flex;
+	flex-direction: column;
+}
 .dxf-ribbon-tabs {
 	display: flex;
 	gap: 2px;
-	padding: 3px 4px 0;
+	padding: 5px 6px 0;
 	border-bottom: 1px solid var(--background-modifier-border);
 	min-width: 0;
 	overflow-x: auto;
@@ -129,8 +145,9 @@
 	border: none;
 	background: transparent;
 	color: var(--text-muted);
-	font-size: var(--font-ui-smaller);
-	padding: 4px 8px;
+	font-size: var(--font-ui-small);
+	font-weight: var(--font-medium, 500);
+	padding: 6px 12px;
 	border-radius: var(--radius-s) var(--radius-s) 0 0;
 	cursor: pointer;
 }
@@ -145,10 +162,58 @@
 }
 .dxf-ribbon-items {
 	display: flex;
-	gap: 2px;
-	padding: 4px;
+	flex-wrap: wrap;
+	align-content: flex-start;
+	gap: 3px;
+	padding: 6px;
 	min-width: 0;
-	overflow-x: auto;
+}
+
+/* larger AutoCAD-style tool button: icon on top, short label underneath */
+.dxf-tool-btn-lg {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 4px;
+	width: 58px;
+	height: 52px;
+	border: none;
+	border-radius: var(--radius-s);
+	background: transparent;
+	color: var(--text-muted);
+	cursor: pointer;
+	padding: 4px 2px;
+	flex: 0 0 auto;
+}
+.dxf-tool-btn-lg:hover {
+	background: var(--background-modifier-hover);
+	color: var(--text-normal);
+}
+.dxf-tool-btn-lg.is-active {
+	background: var(--background-modifier-active-hover, var(--background-modifier-hover));
+	color: var(--text-accent);
+	box-shadow: inset 0 0 0 1px var(--background-modifier-border);
+}
+.dxf-tool-icon {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+}
+.dxf-tool-icon svg {
+	width: 20px;
+	height: 20px;
+}
+.dxf-tool-label {
+	font-size: 10px;
+	line-height: 1;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	max-width: 100%;
+}
+.dxf-ribbon-select .dxf-tool-btn-lg {
+	width: 64px;
 }
 
 /* -- top action cluster ---------------------------------------------------- */
@@ -367,15 +432,27 @@
 
 /* -- touch targets: bigger hit areas on touch devices (phones + tablets) --- */
 @media (pointer: coarse) {
-	.dxf-icon-btn,
-	.dxf-tool-btn {
+	.dxf-icon-btn {
 		width: 38px;
 		height: 38px;
 	}
-	.dxf-icon-btn svg,
-	.dxf-tool-btn svg {
+	.dxf-icon-btn svg {
 		width: 19px;
 		height: 19px;
+	}
+	.dxf-tool-btn-lg {
+		width: 66px;
+		height: 60px;
+	}
+	.dxf-ribbon-select .dxf-tool-btn-lg {
+		width: 72px;
+	}
+	.dxf-tool-icon svg {
+		width: 22px;
+		height: 22px;
+	}
+	.dxf-tool-label {
+		font-size: 11px;
 	}
 	.dxf-card-actions .dxf-icon-btn { width: 30px; height: 30px; }
 	.dxf-layer-row .dxf-icon-btn,
@@ -389,6 +466,19 @@
 	.dxf-ui-top {
 		/* on its own wrapped row now, so it can use the full width for scrolling */
 		flex-basis: 100%;
+	}
+
+	/* the AutoCAD-style labelled buttons are roomy on desktop but too wide for a
+	   phone screen — drop to icon-only so the ribbon still fits comfortably */
+	.dxf-tool-btn-lg {
+		width: 40px;
+		height: 40px;
+	}
+	.dxf-ribbon-select .dxf-tool-btn-lg {
+		width: 40px;
+	}
+	.dxf-tool-label {
+		display: none;
 	}
 
 	.dxf-cards {

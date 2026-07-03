@@ -40,7 +40,8 @@ export type ToolId =
 	| "break"
 	| "explode"
 	| "dimension-linear"
-	| "annotate";
+	| "annotate"
+	| "hatch";
 
 export type Measurement =
 	| { kind: "distance"; length: number; dx: number; dy: number; angleDeg: number }
@@ -54,6 +55,8 @@ export interface ToolContext {
 	doc(): DxfDocument | null;
 	/** snap a raw world point using current OSNAP settings; null = no snap */
 	snap(world: Point2): SnapResult | null;
+	/** true when ortho (hard-lock to 0/90/180/270°) is toggled on for drawing */
+	orthoEnabled(): boolean;
 	/** pick the nearest entity id at a world point */
 	pick(world: Point2): string | null;
 	execute(cmd: Command): void;
@@ -91,8 +94,10 @@ export interface Tool {
 	readonly panWithLeftDrag: boolean;
 	activate?(): void;
 	deactivate?(): void;
-	/** return true on a "down" press the tool consumes (e.g. grabbed a grip) */
-	pointer(phase: "down" | "move" | "up" | "click", world: Point2, ev: PointerEvent): boolean | void;
+	/** return true on a "down" press the tool consumes (e.g. grabbed a grip).
+	 * "cancel" fires when the browser aborts the gesture (pointercancel) instead
+	 * of a normal "up" — tools with multi-event drag state should drop it. */
+	pointer(phase: "down" | "move" | "up" | "click" | "cancel", world: Point2, ev: PointerEvent): boolean | void;
 	/** return true if the key was handled */
 	key?(ev: KeyboardEvent): boolean;
 	/** short hint shown in the UI */
