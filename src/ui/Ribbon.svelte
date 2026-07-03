@@ -35,6 +35,7 @@
 				{ id: "measure-radius", name: "circle-dot", label: "Radius" },
 				{ id: "measure-angle", name: "triangle", label: "Angle" },
 				{ id: "measure-area", name: "square", label: "Area" },
+				{ id: "measure-area-polygon", name: "shapes", label: "Area (poly)", title: "Trace a shape (click points, Enter to close) to measure its area/perimeter" },
 				{ id: "measure-point", name: "crosshair", label: "Point", title: "Coordinate readout (ID point)" },
 			],
 		},
@@ -53,6 +54,9 @@
 				{ id: "draw-rectangle", name: "rectangle-horizontal", label: "Rectangle" },
 				{ id: "draw-polygon", name: "hexagon", label: "Polygon", title: "Draw regular polygon" },
 				{ id: "draw-text", name: "type", label: "Text" },
+				{ id: "dimension-linear", name: "ruler", label: "Dimension", title: "Linear dimension" },
+				{ id: "hatch-solid", name: "paint-bucket", label: "Fill", title: "Solid-fill a closed region (real HATCH entity)" },
+				{ id: "hatch-lines", name: "align-justify", label: "Hatch", title: "Hatch a closed region with parallel lines (colour/spacing/angle)" },
 			],
 		},
 		{
@@ -82,26 +86,10 @@
 				{ id: "match-props", name: "pipette", label: "Match", title: "Match properties" },
 			],
 		},
-		{
-			id: "annotate",
-			label: "Annotate",
-			items: [
-				{ id: "dimension-linear", name: "ruler", label: "Dimension", title: "Linear dimension" },
-				{ id: "hatch", name: "paint-bucket", label: "Fill", title: "Fill / hatch a closed region" },
-				{ id: "annotate", name: "sticky-note", label: "Note", title: "Add note (annotation)" },
-			],
-		},
 	];
 
 	let activeGroup = groups[0].id;
 	$: activeItems = groups.find((g) => g.id === activeGroup)?.items ?? [];
-	// Jump the ribbon to whichever tab the active tool actually lives in, so
-	// switching tools from a card/keyboard shortcut doesn't leave the ribbon
-	// pointing at the wrong tab.
-	$: {
-		const owner = groups.find((g) => g.items.some((it) => it.id === state.activeTool));
-		if (owner && owner.id !== activeGroup) activeGroup = owner.id;
-	}
 </script>
 
 <div class="dxf-ribbon">

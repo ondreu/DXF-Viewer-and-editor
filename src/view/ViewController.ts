@@ -21,11 +21,8 @@ import type { Overlay } from "../render/overlay";
 import { ToolManager } from "../interaction/ToolManager";
 import type { ToolContext, ToolId, Measurement } from "../interaction/types";
 import { computeSnap, DEFAULT_SNAP, type SnapSettings, type SnapResult } from "../interaction/snap";
-import { AnnotationStore } from "../core/annotation/AnnotationStore";
-import type { Annotation } from "../core/annotation/types";
 import { entityLength } from "../core/geom/geometry2d";
 
-const ANNOTATION_COLOR = 0xe0a030;
 const SNAP_PIXELS = 12;
 
 export interface ControllerState {
@@ -47,7 +44,6 @@ export interface ControllerState {
 	gridVisible: boolean;
 	isolating: boolean;
 	snap: SnapSettings;
-	annotations: readonly Annotation[];
 }
 
 export type ControllerEvents = { state: ControllerState };
@@ -68,13 +64,11 @@ export interface ViewControllerOptions {
 export class ViewController {
 	readonly events = new EventEmitter<ControllerEvents>();
 	readonly renderer: DxfRenderer;
-	readonly annotations = new AnnotationStore();
 
 	private doc: DxfDocument | null = null;
 	private stack: CommandStack | null = null;
 	private tools: ToolManager;
 	private selection = new Set<string>();
-	private lastMeasurePoints: Point2[] = [];
 
 	private accent: number;
 	private snapSettings: SnapSettings = { ...DEFAULT_SNAP };
@@ -93,10 +87,6 @@ export class ViewController {
 		this.toolStickiness = opts.toolStickiness ?? (() => "sticky");
 
 		this.tools = new ToolManager(this.buildToolContext(), this.renderer, () => this.emit());
-		this.annotations.events.on("change", () => {
-			this.composeOverlay();
-			this.emit();
-		});
 	}
 
 	private buildToolContext(): ToolContext {
@@ -108,7 +98,6 @@ export class ViewController {
 			execute: (cmd: Command) => {
 				this.stack?.execute(cmd);
 				this.renderer.rebuild();
-				this.syncAttachedAnnotations();
 				// "auto-select" stickiness: hand control back to Select as soon as a
 				// tool finishes a discrete action, instead of staying on the tool.
 				if (this.toolStickiness() === "auto-select" && this.tools.activeId !== "select") this.tools.setActive("select");
@@ -119,18 +108,14 @@ export class ViewController {
 			toggleSelection: (id) => this.toggleSelection(id),
 			selectedId: () => this.selectedId,
 			selectedIds: () => [...this.selection],
-			annotationAt: (world) => this.annotationAt(world),
-			moveAnnotationTo: (id, at, attachTo) => this.moveAnnotationTo(id, at, attachTo),
 			setOverlay: (prims) => {
 				this.toolOverlay = prims;
 				this.composeOverlay();
 			},
-			reportMeasurement: (m, points) => {
+			reportMeasurement: (m) => {
 				this.measurement = m;
-				if (points) this.lastMeasurePoints = points;
 				this.emit();
 			},
-			addAnnotation: (a) => this.annotations.add(a),
 			promptText: (initial, title) => this.promptText(initial, title),
 			activeLayer: () => this.activeLayerName,
 			activeColor: () => this.activeColorAci,
@@ -138,47 +123,6 @@ export class ViewController {
 			accent: this.accent,
 			touch: () => this.emit(),
 		};
-	}
-
-	private annotationAt(world: { x: number; y: number }): string | null {
-		const tol = this.renderer.pixelsToWorld(14);
-		let best: string | null = null;
-		let bestD = tol;
-		for (const a of this.annotations.all) {
-			if (a.kind !== "note") continue;
-			const d = Math.hypot(a.at.x - world.x, a.at.y - world.y);
-			if (d <= bestD) {
-				bestD = d;
-				best = a.id;
-			}
-		}
-		return best;
-	}
-
-	private moveAnnotationTo(id: string, at: { x: number; y: number }, attachTo: string | null): void {
-		if (attachTo && this.doc) {
-			const anchor = this.doc.anchorOf(attachTo);
-			if (anchor) {
-				this.annotations.update(id, { at, attachedTo: attachTo, offset: { x: at.x - anchor.x, y: at.y - anchor.y } });
-				return;
-			}
-		}
-		this.annotations.update(id, { at, attachedTo: undefined, offset: undefined });
-	}
-
-	/** Reposition notes pinned to entities after any geometry edit. */
-	private syncAttachedAnnotations(): void {
-		if (!this.doc) return;
-		for (const a of this.annotations.all) {
-			if (a.kind !== "note" || !a.attachedTo) continue;
-			const anchor = this.doc.anchorOf(a.attachedTo);
-			if (!anchor) {
-				this.annotations.update(a.id, { attachedTo: undefined, offset: undefined });
-				continue;
-			}
-			const off = a.offset ?? { x: 0, y: 0 };
-			this.annotations.update(a.id, { at: { x: anchor.x + off.x, y: anchor.y + off.y } });
-		}
 	}
 
 	clearMeasurement(): void {
@@ -223,14 +167,13 @@ export class ViewController {
 		this.setSelectionIds([]);
 	}
 
-	load(result: ParseResult, annotationJSON: string | null): void {
+	load(result: ParseResult): void {
 		this.doc = DxfDocument.fromResult(result);
 		this.stack = new CommandStack(this.doc);
 		this.stack.events.on("change", () => this.emit());
 		this.selection = new Set();
 		this.measurement = null;
 		this.activeLayerName = result.layers[0]?.name ?? "0";
-		this.annotations.loadJSON(annotationJSON);
 		this.renderer.loadDocument(this.doc);
 		this.renderer.setGridVisible(this.gridVisible);
 		this.composeOverlay();
@@ -238,7 +181,7 @@ export class ViewController {
 	}
 
 	private composeOverlay(): void {
-		this.renderer.setOverlay([...this.annotations.toOverlay(ANNOTATION_COLOR), ...this.toolOverlay]);
+		this.renderer.setOverlay(this.toolOverlay);
 	}
 
 	get document(): DxfDocument | null {
@@ -259,7 +202,7 @@ export class ViewController {
 			editable: !!(this.selectedId && this.doc?.isEditable(this.selectedId)),
 			canUndo: this.stack?.canUndo ?? false,
 			canRedo: this.stack?.canRedo ?? false,
-			dirty: (this.stack?.dirty ?? false) || this.annotations.isDirty,
+			dirty: this.stack?.dirty ?? false,
 			activeTool: this.tools.activeId,
 			hint: this.tools.activeHint(),
 			measurement: this.measurement,
@@ -269,7 +212,6 @@ export class ViewController {
 			gridVisible: this.gridVisible,
 			isolating: this.doc?.isIsolating ?? false,
 			snap: this.snapSettings,
-			annotations: this.annotations.all,
 		};
 	}
 
@@ -328,27 +270,10 @@ export class ViewController {
 		this.emit();
 	}
 
-	saveMeasurementAsAnnotation(): void {
-		if (!this.measurement) return;
-		// Points captured when the measurement completed (robust across mouse moves).
-		const points = this.lastMeasurePoints.length ? this.lastMeasurePoints.map((p) => ({ ...p })) : [{ x: 0, y: 0 }];
-		this.annotations.add({
-			id: AnnotationStore.newId(),
-			kind: "measure",
-			points,
-			data: this.measurement,
-		});
-	}
-
-	removeAnnotation(id: string): void {
-		this.annotations.remove(id);
-	}
-
 	private execEdit(cmd: Command, id: string): void {
 		if (!this.stack) return;
 		this.stack.execute(cmd);
 		this.renderer.refreshEntity(id);
-		this.syncAttachedAnnotations();
 		this.emit();
 	}
 
@@ -364,7 +289,6 @@ export class ViewController {
 			this.stack.execute(new MoveCommand(id, dx, dy));
 			this.renderer.refreshEntity(id);
 		}
-		this.syncAttachedAnnotations();
 		this.emit();
 	}
 
@@ -419,7 +343,6 @@ export class ViewController {
 		const c = pivot ?? this.selectionCentroid(ids);
 		this.stack.execute(new RotateCommand(ids, c.x, c.y, deg));
 		this.renderer.rebuild();
-		this.syncAttachedAnnotations();
 		this.emit();
 	}
 
@@ -462,14 +385,12 @@ export class ViewController {
 	undo(): void {
 		this.stack?.undo();
 		this.renderer.rebuild();
-		this.syncAttachedAnnotations();
 		this.reconcileSelection();
 	}
 
 	redo(): void {
 		this.stack?.redo();
 		this.renderer.rebuild();
-		this.syncAttachedAnnotations();
 		this.reconcileSelection();
 	}
 
@@ -504,21 +425,8 @@ export class ViewController {
 		return this.stack?.dirty ?? false;
 	}
 
-	get annotationsDirty(): boolean {
-		return this.annotations.isDirty;
-	}
-
-	annotationsJSON(drawing?: string): string {
-		return this.annotations.toJSON(drawing);
-	}
-
 	markDxfSaved(): void {
 		this.stack?.markSaved();
-		this.emit();
-	}
-
-	markAnnotationsSaved(): void {
-		this.annotations.markSaved();
 		this.emit();
 	}
 
@@ -530,6 +438,5 @@ export class ViewController {
 	dispose(): void {
 		this.renderer.dispose();
 		this.events.clear();
-		this.annotations.events.clear();
 	}
 }

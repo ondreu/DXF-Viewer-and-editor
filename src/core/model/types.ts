@@ -28,6 +28,7 @@ export type EntityType =
 	| "ELLIPSE"
 	| "LWPOLYLINE"
 	| "POLYLINE"
+	| "HATCH"
 	| "TEXT"
 	| "MTEXT"
 	| "INSERT"
@@ -40,6 +41,7 @@ export const EDITABLE_TYPES: ReadonlySet<EntityType> = new Set<EntityType>([
 	"ARC",
 	"ELLIPSE",
 	"LWPOLYLINE",
+	"HATCH",
 	"TEXT",
 ]);
 
@@ -99,6 +101,16 @@ export interface PolylineEntity extends BaseEntity {
 	closed: boolean;
 }
 
+/** A solid-fill region (drawn by the Fill tool only — v1 always writes a single
+ * external polyline boundary path with pattern "SOLID", never a pattern fill,
+ * multiple loops or islands). Always implicitly closed. Loaded files' own
+ * HATCH entities are far more varied and are never parsed into this shape —
+ * they round-trip as UNSUPPORTED, like any other entity type v1 doesn't own. */
+export interface HatchEntity extends BaseEntity {
+	type: "HATCH";
+	vertices: Point2[];
+}
+
 export interface TextEntity extends BaseEntity {
 	type: "TEXT" | "MTEXT";
 	position: Point2;
@@ -129,6 +141,7 @@ export type RenderEntity =
 	| ArcEntity
 	| EllipseEntity
 	| PolylineEntity
+	| HatchEntity
 	| TextEntity
 	| InsertEntity
 	| UnsupportedEntity;
@@ -176,4 +189,5 @@ export type NewEntitySpec =
 	| { type: "ARC"; layer: string; colorNumber?: number; center: Point2; radius: number; startAngle: number; endAngle: number }
 	| { type: "ELLIPSE"; layer: string; colorNumber?: number; center: Point2; majorAxisEndpoint: Point2; ratio: number; startAngle?: number; endAngle?: number }
 	| { type: "LWPOLYLINE"; layer: string; colorNumber?: number; vertices: Point2[]; closed: boolean }
+	| { type: "HATCH"; layer: string; colorNumber?: number; vertices: Point2[] }
 	| { type: "TEXT"; layer: string; colorNumber?: number; position: Point2; height: number; text: string; rotation?: number };

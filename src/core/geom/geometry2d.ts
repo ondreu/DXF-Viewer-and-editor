@@ -31,6 +31,12 @@ export function entityLength(e: RenderEntity): number {
 			if (e.closed && e.vertices.length > 2) total += dist(e.vertices[e.vertices.length - 1], e.vertices[0]);
 			return total;
 		}
+		case "HATCH": {
+			let total = 0;
+			const v = e.vertices;
+			for (let i = 0; i < v.length; i++) total += dist(v[i], v[(i + 1) % v.length]);
+			return total;
+		}
 		case "ELLIPSE": {
 			const pts = ellipsePoints(e.center, e.majorAxisEndpoint, e.ratio, e.startAngle, e.endAngle);
 			let total = 0;
@@ -50,7 +56,7 @@ export function entityArea(e: RenderEntity): { area: number; perimeter: number }
 		const minor = major * e.ratio;
 		return { area: Math.PI * major * minor, perimeter: entityLength(e) };
 	}
-	if ((e.type === "LWPOLYLINE" || e.type === "POLYLINE") && e.closed && e.vertices.length >= 3) {
+	if (((e.type === "LWPOLYLINE" || e.type === "POLYLINE") && e.closed && e.vertices.length >= 3) || (e.type === "HATCH" && e.vertices.length >= 3)) {
 		const v = e.vertices;
 		let twiceArea = 0;
 		for (let i = 0; i < v.length; i++) {
@@ -62,7 +68,6 @@ export function entityArea(e: RenderEntity): { area: number; perimeter: number }
 	return null;
 }
 
-/** True when a start/end sweep (deg) describes a full ellipse rather than a partial arc. */
 /**
  * Constrain `to` to the nearest multiple of `incrementDeg` (default 90° — the
  * classic CAD "ortho" 0/90/180/270 directions) measured from `from`, keeping
@@ -87,6 +92,7 @@ function norm180(deg: number): number {
 	return d;
 }
 
+/** True when a start/end sweep (deg) describes a full ellipse rather than a partial arc. */
 export function isFullEllipseSweep(startDeg: number, endDeg: number): boolean {
 	return Math.abs(norm360(endDeg - startDeg)) < 1e-6;
 }
@@ -383,6 +389,69 @@ export function extendLinePoint(far: Point2, near: Point2, edge: RenderEntity): 
 	const hits = lineEdgeHits(far, near, edge).filter((h) => h.t > 1 + 1e-6);
 	if (!hits.length) return null;
 	return hits.reduce((a, b) => (b.t < a.t ? b : a)).point;
+}
+
+/** Parametric t along a→b where it crosses finite segment p1-p2, or null if parallel/outside p1-p2. */
+function segmentLineParam(a: Point2, b: Point2, p1: Point2, p2: Point2): number | null {
+	const d1x = b.x - a.x, d1y = b.y - a.y;
+	const d2x = p2.x - p1.x, d2y = p2.y - p1.y;
+	const denom = d1x * d2y - d1y * d2x;
+	if (Math.abs(denom) < 1e-12) return null;
+	const t = ((p1.x - a.x) * d2y - (p1.y - a.y) * d2x) / denom;
+	const u = ((p1.x - a.x) * d1y - (p1.y - a.y) * d1x) / denom;
+	if (u < -1e-9 || u > 1 + 1e-9) return null;
+	return t;
+}
+
+/**
+ * Parallel line segments at `angleDeg`, spaced `spacing` apart, clipped to the
+ * inside of a simple (possibly concave) closed polygon — a classic "hatch
+ * lines" pattern fill. Uses the even-odd rule: a straight line crossing a
+ * simple polygon boundary alternates inside/outside at each crossing, so
+ * pairing sorted crossings (0,1), (2,3), ... gives the inside spans.
+ */
+export function hatchLines(boundary: Point2[], angleDeg: number, spacing: number): Array<[Point2, Point2]> {
+	if (boundary.length < 3 || !(spacing > 1e-9)) return [];
+	const rad = (angleDeg * Math.PI) / 180;
+	const dir = { x: Math.cos(rad), y: Math.sin(rad) };
+	const normal = { x: -dir.y, y: dir.x };
+	let minN = Infinity, maxN = -Infinity, minD = Infinity, maxD = -Infinity;
+	for (const p of boundary) {
+		const n = p.x * normal.x + p.y * normal.y;
+		const d = p.x * dir.x + p.y * dir.y;
+		if (n < minN) minN = n;
+		if (n > maxN) maxN = n;
+		if (d < minD) minD = d;
+		if (d > maxD) maxD = d;
+	}
+	const pad = maxD - minD + spacing * 2 + 1;
+	const n = boundary.length;
+	const segments: Array<[Point2, Point2]> = [];
+	const startK = Math.ceil(minN / spacing);
+	const endK = Math.floor(maxN / spacing);
+	for (let k = startK; k <= endK; k++) {
+		const off = k * spacing;
+		const a = { x: normal.x * off + dir.x * (minD - pad), y: normal.y * off + dir.y * (minD - pad) };
+		const b = { x: normal.x * off + dir.x * (maxD + pad), y: normal.y * off + dir.y * (maxD + pad) };
+		const hits: number[] = [];
+		for (let i = 0; i < n; i++) {
+			const t = segmentLineParam(a, b, boundary[i], boundary[(i + 1) % n]);
+			if (t !== null) hits.push(t);
+		}
+		hits.sort((x, y) => x - y);
+		const dedup: number[] = [];
+		for (const t of hits) {
+			if (!dedup.length || t - dedup[dedup.length - 1] > 1e-9) dedup.push(t);
+		}
+		for (let i = 0; i + 1 < dedup.length; i += 2) {
+			const t0 = dedup[i], t1 = dedup[i + 1];
+			segments.push([
+				{ x: a.x + (b.x - a.x) * t0, y: a.y + (b.y - a.y) * t0 },
+				{ x: a.x + (b.x - a.x) * t1, y: a.y + (b.y - a.y) * t1 },
+			]);
+		}
+	}
+	return segments;
 }
 
 /**

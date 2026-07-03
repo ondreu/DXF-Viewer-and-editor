@@ -14,28 +14,32 @@ This is **v1: DXF only**. DWG is intentionally out of scope (see
 
 - **File view** — click any `.dxf` in the file explorer to open it in a tab,
   the same way the built-in PDF viewer works.
-- **Note embeds** — `![[drawing.dxf]]` renders a read-only viewer inline
-  (annotations included).
+- **Note embeds** — `![[drawing.dxf]]` renders a read-only viewer inline.
 - **Pan / zoom / select** — drag to pan, wheel to zoom, click to select; a
   middle/right-drag always pans, even while a tool is active.
 - **Adaptive grid** — a background grid with nice-number spacing that adapts to
   zoom; toggle from the top bar.
 - **Snapping** — endpoint, midpoint, centre, quadrant, intersection, **line
   extension** and grid snaps drive measuring, drawing **and moving** (drag a
-  grip, an entity body, or a note and it snaps to real geometry).
+  grip or an entity body and it snaps to real geometry).
 - **Measure** — distance (with Δx/Δy and angle), radius/diameter/circumference,
-  and three-point angle, shown in a floating readout. Measurements can be saved
-  as visible annotations.
+  three-point angle, area/perimeter of a circle or closed polyline, a
+  **traced-polygon area** (click a shape's corners like the polyline draw
+  tool, then close it) for regions that aren't already one closed entity, and
+  a coordinate readout (ID point) — all shown in a floating readout.
 - **Draw** — line, circle (centre+radius, 2-point or 3-point), arc
-  (centre+start+end or 3-point), ellipse, polyline, rectangle and regular
-  polygon (any side count), plus text. Drawn geometry becomes **real DXF
-  entities** written back to the file on save. Lines and polylines get a soft
-  angle assist near 0/90/180/270°; an **Ortho** toggle in the top bar hard-locks
-  to those angles, and pressing `Enter` after the start point lets you type an
-  exact angle and length instead of clicking.
+  (centre+start+end or 3-point), ellipse, polyline, rectangle, regular polygon
+  (any side count), text, a linear dimension, and fill/hatch. Drawn geometry
+  becomes **real DXF entities** written back to the file on save. Lines and
+  polylines get a soft angle assist near 0/90/180/270°; an **Ortho** toggle in
+  the top bar hard-locks to those angles, and pressing `Enter` after the start
+  point lets you type an exact angle and length instead of clicking. Text is
+  rendered from a **built-in vector stroke font**, so it stays crisp at any
+  zoom or entity scale instead of pixelating like a raster texture would
+  (lowercase reuses the uppercase letterforms).
 - **Editing** — move, copy, rotate, scale, mirror, delete, and change the
-  layer/colour of `LINE`, `CIRCLE`, `ARC`, `ELLIPSE`, `LWPOLYLINE` and `TEXT`
-  entities, with undo/redo.
+  layer/colour of `LINE`, `CIRCLE`, `ARC`, `ELLIPSE`, `LWPOLYLINE`, `HATCH` and
+  `TEXT` entities, with undo/redo.
 - **Multi-select** — `Ctrl`/`Cmd`+click to add entities to the selection; drag a
   box over empty space for a CAD-style **window/crossing** rubber-band select
   (left-to-right catches only fully-enclosed entities, right-to-left catches
@@ -76,15 +80,14 @@ This is **v1: DXF only**. DWG is intentionally out of scope (see
   about a picked centre), both as one grouped undo step.
 - **Match properties** — an eyedropper that copies a source entity's
   layer/colour onto others you click.
-- **Fill / hatch** — trace a solid fill over a closed polyline, circle or full
-  ellipse. Saved as a "fill" annotation in the sidecar JSON, the same way
-  notes and saved measurements are, so it can never write malformed geometry
-  into the `.dxf` — it won't render in other DXF applications, and resizing
-  the source shape afterwards doesn't move the fill.
-- **Measure** — distance (with Δx/Δy and angle), radius/diameter/circumference,
-  three-point angle, area/perimeter of a circle or closed polyline, and a
-  coordinate readout (ID point), shown in a floating readout. Measurements can
-  be saved as visible annotations.
+- **Fill / hatch** — two real-geometry tools: **Fill** solid-fills a closed
+  polyline, circle or full ellipse as an actual DXF `HATCH` entity (uses the
+  active layer/colour); **Hatch** fills the same kinds of region with parallel
+  lines (real `LINE` entities clipped to the boundary), prompting for line
+  spacing (scale) and angle. Both use the active layer/colour like every other
+  draw tool. A drawing's own pre-existing `HATCH` entities (pattern fills,
+  multiple loops, islands) are far more varied than v1 attempts to parse, so
+  they still round-trip as an *unsupported* placeholder, same as before.
 - **Linear dimension** — click the two points to measure, then place the
   dimension line; builds a real extension-line/arrow/text group (plain
   `LINE`/`LWPOLYLINE`/`TEXT` entities, not a parametric DXF `DIMENSION`) so it
@@ -92,34 +95,34 @@ This is **v1: DXF only**. DWG is intentionally out of scope (see
 - **Layer management** — add layers and set their colour, linetype and
   lineweight; **hide/show** and **freeze/thaw** layers. Edits are written back
   into the DXF `LAYER` table on save.
-- **Annotations** — drop notes and save measurements as markup stored in a
-  **sidecar JSON** (`<drawing>.dxf.annotations.json`); the `.dxf` is never
-  touched by annotations.
 - **Correct geometry** — OCS/extrusion (e.g. mirrored `(0,0,-1)` normals) and
   nested/array block INSERTs are transformed to world coordinates, so holes and
   sub-parts land where AutoCAD puts them.
 - **Non-destructive saves** — anything the editor doesn't understand (whole
-  entity types like `HATCH`, `SPLINE`, real `DIMENSION`, …) is preserved on
-  save and shown as an *unsupported* placeholder, never silently discarded.
+  entity types like `SPLINE`, real `DIMENSION`, a loaded file's own pattern
+  `HATCH`, …) is preserved on save and shown as an *unsupported* placeholder,
+  never silently discarded.
 - **Ribbon toolbar + floating cards** — an AutoCAD-style ribbon: an
   always-visible Select/Select-similar cluster next to a tabbed strip (Measure
-  / Draw / Modify / Arrange / Annotate) of larger icon+label buttons, plus
-  draggable, collapsible cards (properties, measurement, layers, annotations).
-  All styled from Obsidian's own theme variables.
+  / Draw / Modify / Arrange) of larger icon+label buttons, plus draggable,
+  collapsible cards (properties, measurement, layers). All styled from
+  Obsidian's own theme variables.
 
 ### Interface
 
 - **Ribbon** (top-left): an always-visible **Select** / **Similar** cluster
-  (never buried in a tab), plus tabs — **Measure** (distance / radius / angle
-  / area / point) · **Draw** (line / circle [centre-radius, 2-point, 3-point] /
-  arc [centre-based, 3-point] / ellipse / polyline / rectangle / polygon /
-  text) · **Modify** (copy / rotate / scale / mirror / fillet / chamfer / trim
-  / extend / offset / join / break / explode) · **Arrange** (rectangular array
-  / polar array / match properties) · **Annotate** (linear dimension / fill /
-  note).
+  (never buried in a tab, and clicking any tab always shows that tab —
+  switching tabs never fights the currently active tool), plus tabs —
+  **Measure** (distance / radius / angle / area / traced-polygon area / point)
+  · **Draw** (line / circle [centre-radius, 2-point, 3-point] / arc
+  [centre-based, 3-point] / ellipse / polyline / rectangle / polygon / text /
+  linear dimension / fill / hatch) · **Modify** (copy / rotate / scale /
+  mirror / fillet / chamfer / trim / extend / offset / join / break /
+  explode) · **Arrange** (rectangular array / polar array / match
+  properties).
 - **Top bar**: fit · grid toggle · snap toggle · ortho toggle · screenshot ·
-  undo · redo · delete selection · layer isolate · layers · annotations ·
-  save (a dot marks unsaved changes).
+  undo · redo · delete selection · layer isolate · layers · save (a dot marks
+  unsaved changes).
 - **Keyboard**: `Esc` cancels the current tool operation, `Enter` finishes a
   polyline (`C` closes it) or, mid-line, opens a prompt to type an exact
   angle/length instead of clicking the end point; arrow keys nudge a
@@ -131,9 +134,9 @@ This is **v1: DXF only**. DWG is intentionally out of scope (see
 
 | Entity | View | Edit |
 |---|---|---|
-| LINE, CIRCLE, ARC, ELLIPSE, LWPOLYLINE, TEXT | ✅ | ✅ (move / rotate / scale / mirror / delete / layer / colour / dimensions) |
+| LINE, CIRCLE, ARC, ELLIPSE, LWPOLYLINE, HATCH (solid fill only), TEXT | ✅ | ✅ (move / rotate / scale / mirror / delete / layer / colour / dimensions) |
 | POLYLINE, MTEXT, INSERT (flattened blocks) | ✅ | — |
-| Everything else | placeholder marker | preserved on save |
+| Everything else (including pattern/multi-loop HATCH from other CAD tools) | placeholder marker | preserved on save |
 
 `ELLIPSE` editing covers full ellipses (the common case); a partial
 elliptical-arc's trim isn't preserved correctly under **mirror** specifically
@@ -155,10 +158,9 @@ src/
     model/        DxfDocument, entity types, ACI colours, raw passthrough store
     command/      reversible command stack (move/delete/layer/colour/draw/batch)
     serializer/   patches edited entities + injects newly drawn ones
-    annotation/   sidecar annotation store (notes / measurements / markup)
-    geom/         pure 2D geometry (intersections, fillet/chamfer, ellipse
-                  sampling, dimension layout) — independently unit-tested
-  render/         three.js 2D renderer (grid, overlay, pan/zoom/pick)
+    geom/         pure 2D geometry (intersections, fillet/chamfer, hatch lines,
+                  ellipse sampling, dimension layout) — independently unit-tested
+  render/         three.js 2D renderer (grid, overlay, pan/zoom/pick, vector-font text)
   interaction/    snap engine, tool manager, select/measure/draw/edit tools
   worker/         Web Worker host + inlined parse worker (design doc §6)
   view/           Obsidian file view, note embed, view controller bridge

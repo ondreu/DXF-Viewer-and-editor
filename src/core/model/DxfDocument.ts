@@ -209,6 +209,9 @@ export class DxfDocument {
 			case "LWPOLYLINE":
 				e = { id: h, type: "LWPOLYLINE", layer: spec.layer, color, colorNumber: spec.colorNumber, vertices: spec.vertices.map((v) => ({ ...v })), closed: spec.closed };
 				break;
+			case "HATCH":
+				e = { id: h, type: "HATCH", layer: spec.layer, color, colorNumber: spec.colorNumber, vertices: spec.vertices.map((v) => ({ ...v })) };
+				break;
 			case "TEXT":
 				e = { id: h, type: "TEXT", layer: spec.layer, color, colorNumber: spec.colorNumber, position: { ...spec.position }, height: spec.height, rotation: spec.rotation ?? 0, text: spec.text };
 				break;
@@ -400,7 +403,8 @@ export class DxfDocument {
 		}
 	}
 
-	/** Anchor point used to attach annotations to an entity. */
+	/** A representative point for an entity — the rotate/scale pivot default and
+	 * the precise-placement anchor in the Properties card. */
 	anchorOf(id: string): Point2 | null {
 		const e = this.byId.get(id);
 		if (!e) return null;
@@ -413,6 +417,7 @@ export class DxfDocument {
 				return { ...e.center };
 			case "LWPOLYLINE":
 			case "POLYLINE":
+			case "HATCH":
 				return e.vertices[0] ? { ...e.vertices[0] } : null;
 			case "TEXT":
 			case "MTEXT":
@@ -713,6 +718,7 @@ function vertexOf(e: RenderEntity, pairIndex: number): Point2 | null {
 			return pairIndex === 0 ? e.start : pairIndex === 1 ? e.end : null;
 		case "LWPOLYLINE":
 		case "POLYLINE":
+		case "HATCH":
 			return e.vertices[pairIndex] ?? null;
 		case "CIRCLE":
 		case "ARC":
@@ -735,6 +741,7 @@ function vertexIndices(e: RenderEntity): number[] {
 			return [0, 1];
 		case "LWPOLYLINE":
 		case "POLYLINE":
+		case "HATCH":
 			return e.vertices.map((_, i) => i);
 		case "CIRCLE":
 		case "ARC":
@@ -770,6 +777,7 @@ function translate(e: RenderEntity, dx: number, dy: number): void {
 			break;
 		case "LWPOLYLINE":
 		case "POLYLINE":
+		case "HATCH":
 			e.vertices.forEach(p);
 			break;
 		case "TEXT":

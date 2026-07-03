@@ -3,7 +3,6 @@ import type { Command } from "../core/command/commands";
 import type { Point2 } from "../core/model/types";
 import type { Overlay } from "../render/overlay";
 import type { SnapResult } from "./snap";
-import type { Annotation } from "../core/annotation/types";
 
 export type ToolId =
 	| "select"
@@ -12,6 +11,7 @@ export type ToolId =
 	| "measure-radius"
 	| "measure-angle"
 	| "measure-area"
+	| "measure-area-polygon"
 	| "measure-point"
 	| "draw-line"
 	| "draw-circle"
@@ -40,8 +40,8 @@ export type ToolId =
 	| "break"
 	| "explode"
 	| "dimension-linear"
-	| "annotate"
-	| "hatch";
+	| "hatch-solid"
+	| "hatch-lines";
 
 export type Measurement =
 	| { kind: "distance"; length: number; dx: number; dy: number; angleDeg: number }
@@ -69,14 +69,9 @@ export interface ToolContext {
 	selectedId(): string | null;
 	/** all selected entity handles (for group move / rotate) */
 	selectedIds(): string[];
-	/** id of a note annotation near a world point, for dragging it */
-	annotationAt(world: Point2): string | null;
-	/** move a note annotation; `attachTo` pins it to an entity (or null to detach) */
-	moveAnnotationTo(id: string, at: Point2, attachTo: string | null): void;
 	setOverlay(prims: Overlay): void;
-	/** publish a live/final measurement to the UI (null clears); points feed "save as annotation" */
-	reportMeasurement(m: Measurement | null, points?: Point2[]): void;
-	addAnnotation(a: Annotation): void;
+	/** publish a live/final measurement to the UI (null clears) */
+	reportMeasurement(m: Measurement | null): void;
 	promptText(initial: string, title?: string): Promise<string | null>;
 	activeLayer(): string;
 	/** active ACI colour, or null for BYLAYER */
